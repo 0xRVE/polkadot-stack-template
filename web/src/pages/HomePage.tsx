@@ -33,7 +33,12 @@ export default function HomePage() {
 
       try {
         const client = getClient(url);
-        const chain = await client.getChainSpecData();
+        const chain = await Promise.race([
+          client.getChainSpecData(),
+          new Promise<never>((_, reject) =>
+            setTimeout(() => reject(new Error("Connection timed out")), 10000)
+          ),
+        ]);
         setChainName(chain.name);
         setConnected(true);
 
