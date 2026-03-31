@@ -96,9 +96,14 @@ export default function FileDropZone({
             className="rounded border-gray-600"
           />
           Upload file to IPFS (via Bulletin Chain)
-          <span className="text-gray-600 text-xs">
+          <a
+            href="https://paritytech.github.io/polkadot-bulletin-chain/"
+            target="_blank"
+            rel="noopener noreferrer"
+            className="text-gray-600 text-xs hover:text-gray-400 underline"
+          >
             — requires authorization, expires ~7 days
-          </span>
+          </a>
         </label>
       )}
     </div>
