@@ -8247,7 +8247,6 @@ version = "44.0.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "a2324da9a9e139327b11d6468c5b4d20ea2dbaea2b01e6d0c488d96f4323d713"
 dependencies = [
- "array-bytes 6.2.3",
  "frame-benchmarking",
  "frame-support",
  "frame-system",
@@ -8804,7 +8803,6 @@ dependencies = [
  "parity-scale-codec",
  "paste",
  "rand 0.8.5",
- "rand_pcg",
  "scale-info",
  "serde",
  "smallvec",
@@ -9685,7 +9683,6 @@ version = "45.0.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "71ae4df35eb4e9f9183ad1a81842f0f74281d02cdd7fa512cbdb51bbbd9acca5"
 dependencies = [
- "assert_matches",
  "frame-benchmarking",
  "frame-support",
  "frame-system",
@@ -9748,7 +9745,6 @@ dependencies = [
  "polkavm 0.30.0",
  "polkavm-common 0.30.0",
  "rand 0.8.5",
- "rand_pcg",
  "revm",
  "ripemd",
  "rlp 0.6.1",
@@ -10259,7 +10255,6 @@ version = "44.0.1"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "dbd980baac929e1f9e8f0b4d63c1d4e57eec1fd23f9dd0f8944b967f362dceb2"
 dependencies = [
- "array-bytes 6.2.3",
  "frame-benchmarking",
  "frame-support",
  "frame-system",
@@ -11651,7 +11646,6 @@ dependencies = [
  "cumulus-primitives-core",
  "cumulus-relay-chain-interface",
  "docify",
- "frame-benchmarking",
  "frame-benchmarking-cli",
  "frame-support",
  "frame-system-rpc-runtime-api",
@@ -11990,7 +11984,6 @@ dependencies = [
  "cumulus-primitives-utility",
  "cumulus-test-relay-sproof-builder",
  "frame-benchmarking",
- "frame-benchmarking-cli",
  "frame-benchmarking-pallet-pov",
  "frame-election-provider-solution-type",
  "frame-election-provider-support",
@@ -12128,7 +12121,6 @@ dependencies = [
  "parachains-runtimes-test-utils",
  "polkadot-cli",
  "polkadot-core-primitives",
- "polkadot-node-metrics",
  "polkadot-omni-node-lib",
  "polkadot-parachain-primitives",
  "polkadot-primitives",
@@ -12137,9 +12129,7 @@ dependencies = [
  "polkadot-runtime-parachains",
  "polkadot-sdk-frame",
  "polkadot-service",
- "sc-client-db",
  "sc-executor",
- "sc-service",
  "slot-range-helper",
  "sp-api",
  "sp-api-proc-macro",
@@ -12188,7 +12178,6 @@ dependencies = [
  "sp-version-proc-macro",
  "sp-wasm-interface",
  "sp-weights",
- "staging-node-inspect",
  "staging-parachain-info",
  "staging-xcm",
  "staging-xcm-builder",
@@ -12340,7 +12329,6 @@ dependencies = [
  "thiserror 1.0.69",
  "tracing-gum",
  "westend-runtime",
- "westend-runtime-constants",
  "xcm-runtime-apis",
 ]
 
@@ -17250,25 +17238,6 @@ dependencies = [
 ]
 
 [[package]]
-name = "staging-node-inspect"
-version = "0.33.0"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "a6fc28a8a53c0343dc159c57433601160602516339b494e25a4f72081ba53f80"
-dependencies = [
- "clap",
- "parity-scale-codec",
- "sc-cli",
- "sc-client-api",
- "sc-service",
- "sp-blockchain",
- "sp-core",
- "sp-io",
- "sp-runtime",
- "sp-statement-store",
- "thiserror 1.0.69",
-]
-
-[[package]]
 name = "staging-parachain-info"
 version = "0.25.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -18663,7 +18632,6 @@ dependencies = [
  "parity-scale-codec",
  "scale-info",
  "schnorrkel 0.10.2",
- "spin 0.9.8",
 ]
 
 [[package]]
