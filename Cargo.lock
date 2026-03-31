@@ -3886,7 +3886,7 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "7ab67060fc6b8ef687992d439ca0fa36e7ed17e9a0b16b25b601e8757df720de"
 dependencies = [
  "data-encoding",
- "syn 1.0.109",
+ "syn 2.0.117",
 ]
 
 [[package]]
@@ -9789,8 +9789,7 @@ dependencies = [
 [[package]]
 name = "pallet-revive-proc-macro"
 version = "0.7.1"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "5168bf2cfdd1307b832fedda9a48cab3ce56056e532e9407aba48657a7617c13"
+source = "git+https://github.com/paritytech/polkadot-sdk?tag=polkadot-stable2512-3#47f1ee9e5272eb9816561e502f93aa1e0d447856"
 dependencies = [
  "proc-macro2",
  "quote",
