@@ -51,7 +51,7 @@ export default function HomePage() {
 
         try {
           const api = client.getTypedApi(stack_template);
-          await api.query.TemplatePallet.Claims.getEntries({ limit: 1 });
+          await api.query.TemplatePallet.Claims.getEntries();
           detected.templatePallet = true;
         } catch {
           detected.templatePallet = false;
