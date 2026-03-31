@@ -1,12 +1,9 @@
-import { ethers } from "hardhat";
+import hre from "hardhat";
 
 async function main() {
-  const Counter = await ethers.getContractFactory("Counter");
   console.log("Deploying Counter (EVM/solc)...");
-  const counter = await Counter.deploy();
-  await counter.waitForDeployment();
-  const address = await counter.getAddress();
-  console.log(`EVM Counter deployed to: ${address}`);
+  const counter = await hre.viem.deployContract("Counter");
+  console.log(`EVM Counter deployed to: ${counter.address}`);
 }
 
 main().catch((error) => {

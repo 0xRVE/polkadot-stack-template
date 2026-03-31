@@ -1,5 +1,5 @@
 import type { HardhatUserConfig } from "hardhat/config";
-import "@nomicfoundation/hardhat-toolbox";
+import "@nomicfoundation/hardhat-viem";
 import "@parity/hardhat-polkadot";
 import { vars } from "hardhat/config";
 
@@ -22,9 +22,6 @@ const config: HardhatUserConfig = {
       chainId: 420420417,
       accounts: [vars.get("PRIVATE_KEY", "")].filter(Boolean),
     },
-  },
-  ignition: {
-    requiredConfirmations: 1,
   },
 };
 

@@ -1,5 +1,5 @@
 import type { HardhatUserConfig } from "hardhat/config";
-import "@nomicfoundation/hardhat-toolbox";
+import "@nomicfoundation/hardhat-viem";
 import "@nomicfoundation/hardhat-verify";
 import { vars } from "hardhat/config";
 

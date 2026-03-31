@@ -1,7 +1,7 @@
 {
   "name": "pvm-counter",
   "version": "0.1.0",
-  "description": "PVM deployment of the Counter contract using Hardhat + resolc (Solidity to PolkaVM)",
+  "description": "PVM deployment of the Counter contract using Hardhat + resolc + viem",
   "scripts": {
     "compile": "npx hardhat compile",
     "test": "npx hardhat test",
@@ -9,8 +9,16 @@
     "deploy:testnet": "npx hardhat run scripts/deploy.ts --network polkadotTestnet"
   },
   "devDependencies": {
-    "@nomicfoundation/hardhat-toolbox": "^5.0.0",
+    "@nomicfoundation/hardhat-network-helpers": "^1.0.0",
+    "@nomicfoundation/hardhat-viem": "^2.0.0",
     "@parity/hardhat-polkadot": "0.2.7",
-    "@parity/resolc": "1.0.0"
+    "@parity/resolc": "1.0.0",
+    "@types/chai": "^5.2.3",
+    "@types/mocha": "^10.0.10",
+    "chai": "^4.3.0",
+    "hardhat": "^2.27.0",
+    "ts-node": "^10.9.2",
+    "typescript": "^6.0.2",
+    "viem": "^2.0.0"
   }
 }

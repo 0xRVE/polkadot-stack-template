@@ -1,7 +1,7 @@
 {
   "name": "evm-counter",
   "version": "0.1.0",
-  "description": "EVM deployment of the Counter contract using standard Hardhat + solc",
+  "description": "EVM deployment of the Counter contract using Hardhat + solc + viem",
   "scripts": {
     "compile": "npx hardhat compile",
     "test": "npx hardhat test",
@@ -10,8 +10,15 @@
     "verify": "npx hardhat verify --network polkadotTestnet"
   },
   "devDependencies": {
-    "@nomicfoundation/hardhat-toolbox": "^5.0.0",
+    "@nomicfoundation/hardhat-network-helpers": "^1.0.0",
     "@nomicfoundation/hardhat-verify": "^2.0.0",
-    "hardhat": "^2.27.0"
+    "@nomicfoundation/hardhat-viem": "^2.0.0",
+    "@types/chai": "^5.2.3",
+    "@types/mocha": "^10.0.10",
+    "chai": "^4.3.0",
+    "hardhat": "^2.27.0",
+    "ts-node": "^10.9.2",
+    "typescript": "^6.0.2",
+    "viem": "^2.0.0"
   }
 }
