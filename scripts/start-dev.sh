@@ -25,7 +25,6 @@ chain-spec-builder \
     create \
     -t development \
     --relay-chain paseo-local \
-    --para-id 1000 \
     --runtime "$WASM_PATH" \
     named-preset development
 
