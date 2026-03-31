@@ -13,11 +13,13 @@ cargo build -p stack-template-runtime --release
 
 # Create the chain spec using the newly built WASM
 echo "[2/3] Generating chain spec..."
-chain-spec-builder create -t development \
+chain-spec-builder \
+    -c "$ROOT_DIR/blockchain/chain_spec.json" \
+    create -t development \
     --relay-chain paseo \
     --para-id 1000 \
     --runtime "$ROOT_DIR/target/release/wbuild/stack-template-runtime/stack_template_runtime.compact.compressed.wasm" \
-    named-preset development > "$ROOT_DIR/blockchain/chain_spec.json"
+    named-preset development
 
 echo "  Chain spec written to blockchain/chain_spec.json"
 

@@ -13,11 +13,13 @@ cargo build -p stack-template-runtime --release
 
 # Create the chain spec
 echo "[2/5] Generating chain spec..."
-chain-spec-builder create -t development \
+chain-spec-builder \
+    -c "$ROOT_DIR/blockchain/chain_spec.json" \
+    create -t development \
     --relay-chain paseo \
     --para-id 1000 \
     --runtime "$ROOT_DIR/target/release/wbuild/stack-template-runtime/stack_template_runtime.compact.compressed.wasm" \
-    named-preset development > "$ROOT_DIR/blockchain/chain_spec.json"
+    named-preset development
 
 # Install and compile contracts
 echo "[3/5] Compiling contracts..."
