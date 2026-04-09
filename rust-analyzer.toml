@@ -1,0 +1,18 @@
+# Rust-analyzer settings for polkadot-sdk consumer projects.
+# Projects that depend on polkadot-sdk pull in a large dependency tree that
+# makes rust-analyzer slow by default. These settings help keep it usable.
+
+[cargo]
+# Skip WASM runtime compilation during analysis — saves ~50% of build time.
+extraEnv = { "SKIP_WASM_BUILD" = "1" }
+
+# Use a separate target directory so rust-analyzer and CLI cargo builds
+# do not invalidate each other's caches.
+targetDir = "target/rust-analyzer"
+
+[procMacro.ignored]
+# Proc macros known to cause rust-analyzer slowdowns or instability.
+async-trait = ["async_trait"]
+napi-derive = ["napi"]
+async-recursion = ["async_recursion"]
+async-std = ["async_std"]
