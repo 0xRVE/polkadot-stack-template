@@ -74,7 +74,22 @@ A Rust CLI tool using [subxt](https://github.com/parity-tech/subxt) and [alloy](
 
 ## Quick Start
 
-### Prerequisites
+### Docker (no Rust required)
+
+```bash
+# Start the parachain node + Ethereum RPC adapter (first build compiles the runtime ~10-20 min)
+docker compose up -d
+
+# Deploy contracts and start the frontend on the host
+cd contracts/evm && npm install && npm run deploy:local
+cd contracts/pvm && npm install && npm run deploy:local
+cd web && npm install && npm run dev
+# Frontend: http://127.0.0.1:5173
+```
+
+Only Node.js is needed on the host. The Docker build compiles the Rust runtime and generates the chain spec automatically.
+
+### Prerequisites (native)
 
 - **Rust** (stable, installed via [rustup](https://rustup.rs/))
 - **Node.js** 22.x LTS (`22.5+` recommended) and npm v10.9.0+

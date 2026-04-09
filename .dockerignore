@@ -1,0 +1,15 @@
+# Keep Docker build context small — only the Rust workspace is needed
+# for building the runtime and generating the chain spec.
+target/
+node_modules/
+dist/
+.git/
+chain_data/
+web/
+contracts/
+scripts/
+.github/
+.vscode/
+*.swp
+*.swo
+.DS_Store

@@ -1,0 +1,70 @@
+# Local development environment — parachain node + Ethereum JSON-RPC adapter.
+#
+# First build (compiles the runtime inside Docker, ~10-20 min):
+#   docker compose up -d
+#
+# Subsequent starts (cached, seconds):
+#   docker compose up -d
+#
+# Once running:
+#   Substrate RPC:  ws://127.0.0.1:9944
+#   Ethereum RPC:   http://127.0.0.1:8545
+#
+# Then deploy contracts and start the frontend on the host:
+#   cd contracts/evm && npm install && npm run deploy:local
+#   cd contracts/pvm && npm install && npm run deploy:local
+#   cd web && npm install && npm run dev
+#
+# Tear down:
+#   docker compose down -v
+
+services:
+  node:
+    build:
+      context: .
+      dockerfile: Dockerfile.node
+    ports:
+      - "9944:9944"
+    volumes:
+      - chain-data:/data
+    command: >
+      polkadot-omni-node
+      --chain=/chain/chain_spec.json
+      --base-path=/data
+      --alice
+      --force-authoring
+      --dev-block-time=3000
+      --unsafe-force-node-key-generation
+      --rpc-external
+      --rpc-cors=all
+      --rpc-methods=unsafe
+      --rpc-port=9944
+    healthcheck:
+      test: ["CMD-SHELL", "bash -c 'echo > /dev/tcp/127.0.0.1/9944' 2>/dev/null"]
+      interval: 5s
+      timeout: 3s
+      retries: 30
+      start_period: 10s
+
+  eth-rpc:
+    build:
+      context: .
+      dockerfile: Dockerfile.eth-rpc
+    ports:
+      - "8545:8545"
+    command: >
+      --node-rpc-url ws://node:9944
+      --rpc-port 8545
+      --rpc-cors all
+    depends_on:
+      node:
+        condition: service_healthy
+    healthcheck:
+      test: ["CMD-SHELL", "curl -sf -X POST -H 'Content-Type: application/json' -d '{\"jsonrpc\":\"2.0\",\"id\":1,\"method\":\"eth_chainId\",\"params\":[]}' http://127.0.0.1:8545 | grep -q result"]
+      interval: 5s
+      timeout: 3s
+      retries: 30
+      start_period: 5s
+
+volumes:
+  chain-data:

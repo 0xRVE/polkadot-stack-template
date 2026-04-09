@@ -95,6 +95,19 @@ cd contracts/evm && npm run fmt
 cd contracts/pvm && npm run fmt
 ```
 
+## Docker
+
+```bash
+docker compose up -d    # builds runtime in Docker, starts node + eth-rpc
+docker compose down -v  # tear down
+```
+
+- `Dockerfile.node` — multi-stage: compiles runtime WASM, generates chain spec, packages into polkadot-omni-node image
+- `Dockerfile.eth-rpc` — downloads pre-built eth-rpc binary from polkadot-sdk GH release (no official Docker image exists)
+- `docker-compose.yml` (root) — full stack: node (port 9944) + eth-rpc (port 8545)
+- `blockchain/docker-compose.yml` — simple node-only option (requires pre-generated chain_spec.json)
+- `.dockerignore` — excludes web/, contracts/, target/, node_modules/ from build context
+
 ## Running Locally
 
 ```bash
@@ -129,5 +142,5 @@ cd contracts/pvm && npm run fmt
 - **Shell script linting**: `scripts/` has ~1180 lines of bash with no linting in CI. A workflow running `shellcheck scripts/*.sh` would catch issues.
 - **deployments.json workflow**: The checked-in stub can cause merge conflicts when multiple branches deploy. Consider documenting the intended workflow or gitignoring it.
 - **E2E tests in CI**: Zombienet smoke tests exist locally (`scripts/test-zombienet.sh`, `scripts/test-statement-store-smoke.sh`) but are not run in CI due to binary dependencies.
-- **Docker coverage**: `blockchain/docker-compose.yml` only runs the node. An `eth-rpc` sidecar and frontend service would make Docker self-contained.
+- **Docker eth-rpc image**: No official `parity/eth-rpc` Docker image exists. `Dockerfile.eth-rpc` downloads the binary from GH releases as a workaround.
 - **Commit message conventions**: Consider adopting Conventional Commits for clearer changelog generation.

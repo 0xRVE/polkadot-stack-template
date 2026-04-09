@@ -1,0 +1,29 @@
+# Multi-stage build: compile the runtime WASM, generate a chain spec, then
+# package it into the lightweight polkadot-omni-node image.
+#
+# No Rust toolchain or polkadot-sdk binaries needed on the host.
+
+# Stage 1 — Build the parachain runtime WASM binary
+FROM rust:1.86-bookworm AS builder
+WORKDIR /build
+COPY Cargo.toml Cargo.lock rust-toolchain.toml ./
+COPY blockchain/ blockchain/
+COPY cli/ cli/
+RUN cargo build -p stack-template-runtime --release
+
+# Stage 2 — Generate the chain spec from the compiled WASM
+RUN cargo install staging-chain-spec-builder
+RUN chain-spec-builder \
+    -c /build/chain_spec.json \
+    create \
+    --chain-name "Polkadot Stack Template" \
+    --chain-id "polkadot-stack-template" \
+    -t development \
+    --relay-chain rococo-local \
+    --para-id 1000 \
+    --runtime target/release/wbuild/stack-template-runtime/stack_template_runtime.compact.compressed.wasm \
+    named-preset development
+
+# Stage 3 — Final image: just the omni-node binary + our chain spec
+FROM docker.io/parity/polkadot-omni-node:stable2512-3
+COPY --from=builder /build/chain_spec.json /chain/chain_spec.json

@@ -1,0 +1,13 @@
+# Lightweight image for the Ethereum JSON-RPC adapter (eth-rpc).
+# Downloads the pre-built binary from the polkadot-sdk GitHub release.
+# No official parity/eth-rpc Docker image exists yet.
+
+FROM debian:bookworm-slim
+ARG ETH_RPC_VERSION=polkadot-stable2512-3
+RUN apt-get update \
+    && apt-get install -y --no-install-recommends curl ca-certificates \
+    && curl -sL "https://github.com/paritytech/polkadot-sdk/releases/download/${ETH_RPC_VERSION}/eth-rpc" \
+       -o /usr/local/bin/eth-rpc \
+    && chmod +x /usr/local/bin/eth-rpc \
+    && rm -rf /var/lib/apt/lists/*
+ENTRYPOINT ["eth-rpc"]
