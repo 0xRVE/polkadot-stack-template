@@ -31,12 +31,12 @@ interface Claim {
 
 const colorMap = {
 	purple: {
-		title: "text-purple-400",
-		button: "bg-purple-600 hover:bg-purple-700",
+		title: "text-accent-purple",
+		gradient: "linear-gradient(135deg, #8b5cf6 0%, #7c3aed 100%)",
 	},
 	green: {
-		title: "text-green-400",
-		button: "bg-green-600 hover:bg-green-700",
+		title: "text-accent-green",
+		gradient: "linear-gradient(135deg, #10b981 0%, #059669 100%)",
 	},
 };
 
@@ -259,25 +259,27 @@ export default function ContractProofOfExistencePage({
 	const currentAddress = evmDevAccounts[selectedAccount].account.address;
 
 	return (
-		<div className="space-y-6">
-			<h1 className={`text-2xl font-bold ${colors.title}`}>{title}</h1>
-			<p className="text-gray-400">{description}</p>
+		<div className="space-y-6 animate-fade-in">
+			<div className="space-y-2">
+				<h1 className={`page-title ${colors.title}`}>{title}</h1>
+				<p className="text-text-secondary">{description}</p>
+			</div>
 
-			<div className="bg-gray-900 rounded-lg p-5 border border-gray-800 space-y-4">
+			<div className="card space-y-4">
 				<div>
-					<label className="text-sm text-gray-400 block mb-1">Contract Address</label>
+					<label className="label">Contract Address</label>
 					<div className="flex gap-2">
 						<input
 							type="text"
 							value={contractAddress}
 							onChange={(e) => saveAddress(e.target.value)}
 							placeholder="0x..."
-							className="bg-gray-800 border border-gray-700 rounded px-3 py-2 text-white w-full font-mono text-sm"
+							className="input-field w-full"
 						/>
 						{defaultAddress && contractAddress !== defaultAddress && (
 							<button
 								onClick={() => saveAddress(defaultAddress)}
-								className="px-3 py-2 bg-gray-700 hover:bg-gray-600 rounded text-gray-300 text-xs whitespace-nowrap"
+								className="btn-secondary text-xs whitespace-nowrap"
 							>
 								Reset
 							</button>
@@ -286,11 +288,11 @@ export default function ContractProofOfExistencePage({
 				</div>
 
 				<div>
-					<label className="text-sm text-gray-400 block mb-1">Dev Account</label>
+					<label className="label">Dev Account</label>
 					<select
 						value={selectedAccount}
 						onChange={(e) => setSelectedAccount(parseInt(e.target.value))}
-						className="bg-gray-800 border border-gray-700 rounded px-3 py-2 text-white w-full"
+						className="input-field w-full"
 					>
 						{evmDevAccounts.map((acc, i) => (
 							<option key={i} value={i}>
@@ -313,16 +315,21 @@ export default function ContractProofOfExistencePage({
 				/>
 
 				{fileHash && (
-					<div className="space-y-2">
-						<p className="text-sm text-gray-400">
+					<div className="space-y-3">
+						<p className="text-sm text-text-secondary">
 							Blake2b-256:{" "}
-							<code className="text-white font-mono text-xs break-all">
+							<code className="text-text-primary font-mono text-xs break-all">
 								{fileHash}
 							</code>
 						</p>
 						<button
 							onClick={createClaim}
-							className={`px-4 py-2 ${colors.button} rounded text-white text-sm`}
+							className="btn-accent"
+							style={{
+								background: colors.gradient,
+								boxShadow:
+									"0 1px 2px rgba(0,0,0,0.3), inset 0 1px 0 rgba(255,255,255,0.1)",
+							}}
 						>
 							Create Claim
 						</button>
@@ -331,27 +338,29 @@ export default function ContractProofOfExistencePage({
 
 				{txStatus && (
 					<p
-						className={`text-sm ${txStatus.startsWith("Error") ? "text-red-400" : "text-green-400"}`}
+						className={`text-sm font-medium ${txStatus.startsWith("Error") ? "text-accent-red" : "text-accent-green"}`}
 					>
 						{txStatus}
 					</p>
 				)}
 			</div>
 
-			<div className="bg-gray-900 rounded-lg p-5 border border-gray-800 space-y-4">
+			<div className="card space-y-4">
 				<div className="flex items-center justify-between">
-					<h2 className="text-lg font-semibold text-gray-300">Claims</h2>
+					<h2 className="section-title">Claims</h2>
 					<button
 						onClick={loadClaims}
 						disabled={loading}
-						className="px-3 py-1 bg-gray-700 hover:bg-gray-600 rounded text-white text-sm"
+						className="btn-secondary text-xs"
 					>
 						{loading ? "Loading..." : "Refresh"}
 					</button>
 				</div>
 
 				{claims.length === 0 ? (
-					<p className="text-gray-500 text-sm">No claims found. Click Refresh to load.</p>
+					<p className="text-text-muted text-sm">
+						No claims found. Click Refresh to load.
+					</p>
 				) : (
 					<div className="space-y-2">
 						{claims.map((claim) => {
@@ -359,18 +368,18 @@ export default function ContractProofOfExistencePage({
 							return (
 								<div
 									key={claim.hash}
-									className="bg-gray-800 rounded p-3 text-sm space-y-1"
+									className="rounded-lg border border-white/[0.04] bg-white/[0.02] p-3 text-sm space-y-1.5"
 								>
-									<p className="font-mono text-xs text-gray-300 break-all">
+									<p className="font-mono text-xs text-text-secondary break-all">
 										{claim.hash}
 									</p>
-									<p className="text-gray-400">
+									<p className="text-text-tertiary">
 										Owner:{" "}
-										<span className="text-gray-300">
+										<span className="text-text-secondary">
 											{claim.owner.slice(0, 8)}...{claim.owner.slice(-4)}
 										</span>{" "}
 										| Block:{" "}
-										<span className="text-gray-300">
+										<span className="text-text-secondary">
 											{claim.block.toString()}
 										</span>{" "}
 										{ipfsAvailable[claim.hash] && (
@@ -381,7 +390,7 @@ export default function ContractProofOfExistencePage({
 													href={ipfsUrl(cid)}
 													target="_blank"
 													rel="noopener noreferrer"
-													className="text-blue-400 hover:text-blue-300 underline"
+													className="text-accent-blue hover:underline"
 												>
 													View on IPFS
 												</a>
@@ -391,7 +400,7 @@ export default function ContractProofOfExistencePage({
 									{claim.owner.toLowerCase() === currentAddress.toLowerCase() && (
 										<button
 											onClick={() => revokeClaim(claim.hash)}
-											className="px-2 py-1 bg-red-600 hover:bg-red-700 rounded text-white text-xs"
+											className="px-2 py-1 rounded-md bg-accent-red/10 text-accent-red text-xs font-medium hover:bg-accent-red/20 transition-colors"
 										>
 											Revoke
 										</button>

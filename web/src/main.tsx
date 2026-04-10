@@ -12,8 +12,9 @@ const AccountsPage = lazy(() => import("./pages/AccountsPage"));
 const StatementStorePage = lazy(() => import("./pages/StatementStorePage"));
 
 const routeFallback = (
-	<div className="rounded-lg border border-gray-800 bg-gray-900 px-4 py-3 text-sm text-gray-400">
-		Loading page...
+	<div className="card animate-pulse">
+		<div className="h-4 w-32 rounded bg-white/[0.06]" />
+		<div className="mt-3 h-3 w-48 rounded bg-white/[0.04]" />
 	</div>
 );
 

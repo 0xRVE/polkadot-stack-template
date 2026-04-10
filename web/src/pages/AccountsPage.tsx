@@ -76,11 +76,13 @@ function CopyableAddress({ label, address }: { label: string; address: string })
 			className="flex items-center gap-2 cursor-pointer group"
 			title="Click to copy"
 		>
-			<span className="text-xs text-gray-500 w-8 shrink-0">{label}</span>
-			<code className="text-xs text-gray-300 font-mono break-all flex-1 group-hover:text-white transition-colors">
+			<span className="text-xs text-text-muted w-8 shrink-0 uppercase font-medium">
+				{label}
+			</span>
+			<code className="text-xs text-text-secondary font-mono break-all flex-1 group-hover:text-text-primary transition-colors">
 				{address}
 			</code>
-			<span className="text-xs text-gray-500 group-hover:text-gray-300 shrink-0 transition-colors">
+			<span className="text-xs text-text-muted group-hover:text-text-secondary shrink-0 transition-colors">
 				{copied ? "Copied!" : "Copy"}
 			</span>
 		</div>
@@ -271,45 +273,49 @@ export default function AccountsPage() {
 		talisman: "Talisman",
 	};
 
-	const typeBadge: Record<string, { bg: string; text: string; label: string }> = {
-		dev: { bg: "bg-blue-900", text: "text-blue-300", label: "Dev" },
+	const typeBadge: Record<string, { className: string; label: string }> = {
+		dev: {
+			className: "bg-accent-blue/10 text-accent-blue border border-accent-blue/20",
+			label: "Dev",
+		},
 		extension: {
-			bg: "bg-purple-900",
-			text: "text-purple-300",
+			className: "bg-accent-purple/10 text-accent-purple border border-accent-purple/20",
 			label: "Extension",
 		},
-		spektr: { bg: "bg-pink-900", text: "text-pink-300", label: "Spektr" },
+		spektr: {
+			className: "bg-polka-500/10 text-polka-400 border border-polka-500/20",
+			label: "Host",
+		},
 	};
 
 	return (
-		<div className="space-y-6">
-			<h1 className="text-2xl font-bold text-pink-400">Accounts</h1>
-			<p className="text-gray-400">
-				Manage dev accounts, connect browser extension wallets, or use Spektr accounts from
-				the Polkadot host. Fund accounts using Sudo on the dev chain.
-			</p>
+		<div className="space-y-6 animate-fade-in">
+			<div className="space-y-2">
+				<h1 className="page-title text-polka-400">Accounts</h1>
+				<p className="text-text-secondary">
+					Manage dev accounts, connect browser extension wallets, or use Polkadot Host
+					accounts. Fund accounts using Sudo on the dev chain.
+				</p>
+			</div>
 
 			{/* Fund amount */}
-			<div className="bg-gray-900 rounded-lg p-5 border border-gray-800 space-y-3">
-				<h2 className="text-lg font-semibold text-gray-300">Funding</h2>
+			<div className="card space-y-3">
+				<h2 className="section-title">Funding</h2>
 				<div className="flex gap-3 items-center">
-					<label className="text-sm text-gray-400">Amount (tokens):</label>
+					<label className="text-sm text-text-secondary">Amount (tokens):</label>
 					<input
 						type="number"
 						value={fundAmount}
 						onChange={(e) => setFundAmount(e.target.value)}
-						className="bg-gray-800 border border-gray-700 rounded px-3 py-1.5 text-white w-40 text-sm"
+						className="input-field w-40"
 					/>
-					<button
-						onClick={fetchAccountInfos}
-						className="px-3 py-1.5 bg-gray-700 hover:bg-gray-600 rounded text-white text-xs"
-					>
+					<button onClick={fetchAccountInfos} className="btn-secondary text-xs">
 						Refresh Balances
 					</button>
 				</div>
 				{fundStatus && (
 					<p
-						className={`text-sm ${fundStatus.startsWith("Error") ? "text-red-400" : "text-green-400"}`}
+						className={`text-sm font-medium ${fundStatus.startsWith("Error") ? "text-accent-red" : "text-accent-green"}`}
 					>
 						{fundStatus}
 					</p>
@@ -317,9 +323,9 @@ export default function AccountsPage() {
 			</div>
 
 			{/* Dev Accounts */}
-			<div className="bg-gray-900 rounded-lg p-5 border border-gray-800 space-y-4">
-				<h2 className="text-lg font-semibold text-gray-300">Dev Accounts</h2>
-				<p className="text-sm text-gray-500">
+			<div className="card space-y-4">
+				<h2 className="section-title">Dev Accounts</h2>
+				<p className="text-sm text-text-muted">
 					Pre-funded accounts from the well-known dev seed phrase.
 				</p>
 				<div className="space-y-3">
@@ -336,48 +342,39 @@ export default function AccountsPage() {
 				</div>
 			</div>
 
-			{/* Spektr Accounts (Polkadot Host) */}
-			<div className="bg-gray-900 rounded-lg p-5 border border-gray-800 space-y-4">
-				<h2 className="text-lg font-semibold text-gray-300">Spektr (Polkadot Host)</h2>
+			{/* Polkadot Host Accounts */}
+			<div className="card space-y-4">
+				<h2 className="section-title">Polkadot Host Accounts</h2>
 				{spektrStatus === "detecting" && (
-					<p className="text-sm text-yellow-400">
+					<p className="text-sm text-accent-yellow">
 						Detecting Polkadot host environment...
 					</p>
 				)}
 				{spektrStatus === "injecting" && (
-					<p className="text-sm text-yellow-400">Injecting Spektr extension...</p>
+					<p className="text-sm text-accent-yellow">Connecting to Polkadot Host...</p>
 				)}
 				{spektrStatus === "unavailable" && (
-					<p className="text-sm text-gray-500">
-						Not running inside a Polkadot host (Desktop or Web). Spektr accounts are
-						only available when loaded through the{" "}
-						<a
-							href="https://polkadot.com"
-							target="_blank"
-							rel="noopener noreferrer"
-							className="text-pink-400 underline"
-						>
-							Polkadot app
-						</a>
-						.
+					<p className="text-sm text-text-muted">
+						Not running inside a Polkadot Host. These accounts are only available when
+						this app is loaded through a Polkadot Host client.
 					</p>
 				)}
 				{spektrStatus === "failed" && (
-					<p className="text-sm text-red-400">
-						Failed to connect to Spektr. The host may not have injected the extension.
+					<p className="text-sm text-accent-red">
+						Failed to connect to Polkadot Host. The host environment may not be available.
 					</p>
 				)}
 				{spektrStatus === "connected" && (
 					<div className="space-y-3">
-						<p className="text-sm text-green-400">
-							Connected to Spektr ({spektrAccounts.length} account
+						<p className="text-sm text-accent-green font-medium">
+							Connected to Polkadot Host ({spektrAccounts.length} account
 							{spektrAccounts.length !== 1 ? "s" : ""})
 						</p>
 						{spektrAccounts.map((acc) => (
 							<AccountCard
 								key={acc.address}
 								account={{
-									name: acc.name || "Spektr Account",
+									name: acc.name || "Host Account",
 									ss58: acc.address,
 									eth: ss58ToH160(acc.address),
 									type: "spektr",
@@ -385,7 +382,7 @@ export default function AccountsPage() {
 								info={accountInfos[acc.address]}
 								badge={typeBadge.spektr}
 								onFund={() =>
-									fundAccount(acc.address, acc.name || "Spektr account")
+									fundAccount(acc.address, acc.name || "Host account")
 								}
 								connected={connected}
 							/>
@@ -395,23 +392,23 @@ export default function AccountsPage() {
 			</div>
 
 			{/* Extension Wallets */}
-			<div className="bg-gray-900 rounded-lg p-5 border border-gray-800 space-y-4">
-				<h2 className="text-lg font-semibold text-gray-300">Browser Extension Wallets</h2>
+			<div className="card space-y-4">
+				<h2 className="section-title">Browser Extension Wallets</h2>
 				{connectedWallet ? (
 					<div className="space-y-3">
 						<div className="flex items-center gap-3">
-							<span className="text-sm text-green-400">
+							<span className="text-sm text-accent-green font-medium">
 								Connected to {walletNames[connectedWallet] || connectedWallet}
 							</span>
 							<button
 								onClick={disconnectWallet}
-								className="px-3 py-1 bg-red-600 hover:bg-red-700 rounded text-white text-xs"
+								className="px-3 py-1 rounded-md bg-accent-red/10 text-accent-red text-xs font-medium hover:bg-accent-red/20 transition-colors"
 							>
 								Disconnect
 							</button>
 						</div>
 						{extensionAccounts.length === 0 ? (
-							<p className="text-sm text-gray-500">
+							<p className="text-sm text-text-muted">
 								No accounts found in this wallet.
 							</p>
 						) : (
@@ -440,20 +437,20 @@ export default function AccountsPage() {
 							<button
 								key={name}
 								onClick={() => connectWallet(name)}
-								className="px-4 py-2 bg-pink-600 hover:bg-pink-700 rounded text-white text-sm"
+								className="btn-primary"
 							>
 								Connect {walletNames[name] || name}
 							</button>
 						))}
 					</div>
 				) : (
-					<p className="text-sm text-gray-500">
+					<p className="text-sm text-text-muted">
 						No browser extension wallets detected. Install{" "}
 						<a
 							href="https://polkadot.js.org/extension/"
 							target="_blank"
 							rel="noopener noreferrer"
-							className="text-pink-400 underline"
+							className="text-polka-400 underline hover:text-polka-300"
 						>
 							Polkadot.js
 						</a>
@@ -462,7 +459,7 @@ export default function AccountsPage() {
 							href="https://www.talisman.xyz/"
 							target="_blank"
 							rel="noopener noreferrer"
-							className="text-pink-400 underline"
+							className="text-polka-400 underline hover:text-polka-300"
 						>
 							Talisman
 						</a>
@@ -471,7 +468,7 @@ export default function AccountsPage() {
 							href="https://www.subwallet.app/"
 							target="_blank"
 							rel="noopener noreferrer"
-							className="text-pink-400 underline"
+							className="text-polka-400 underline hover:text-polka-300"
 						>
 							SubWallet
 						</a>{" "}
@@ -492,31 +489,29 @@ function AccountCard({
 }: {
 	account: DisplayAccount;
 	info?: AccountInfo;
-	badge: { bg: string; text: string; label: string };
+	badge: { className: string; label: string };
 	onFund: () => void;
 	connected: boolean;
 }) {
 	return (
-		<div className="bg-gray-800 rounded p-3 space-y-2">
+		<div className="rounded-lg border border-white/[0.04] bg-white/[0.02] p-3 space-y-2">
 			<div className="flex items-center justify-between">
-				<span className="font-semibold text-gray-200">{account.name}</span>
+				<span className="font-semibold text-text-primary">{account.name}</span>
 				<div className="flex gap-2 items-center">
 					{info && (
-						<span className="text-xs text-gray-400 font-mono">
+						<span className="text-xs text-text-tertiary font-mono">
 							{formatBalance(info.balance)} | nonce: {info.nonce}
 						</span>
 					)}
 					{connected && (
 						<button
 							onClick={onFund}
-							className="px-2 py-1 bg-yellow-600 hover:bg-yellow-700 rounded text-white text-xs"
+							className="px-2 py-1 rounded-md bg-accent-yellow/10 text-accent-yellow text-xs font-medium hover:bg-accent-yellow/20 transition-colors"
 						>
 							Fund
 						</button>
 					)}
-					<span className={`px-2 py-0.5 rounded text-xs ${badge.bg} ${badge.text}`}>
-						{badge.label}
-					</span>
+					<span className={`status-badge ${badge.className}`}>{badge.label}</span>
 				</div>
 			</div>
 			<div className="space-y-1">

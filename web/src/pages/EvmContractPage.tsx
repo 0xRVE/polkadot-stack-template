@@ -8,9 +8,14 @@ export default function EvmContractPage() {
 			description={
 				<>
 					Claim file hashes via the Solidity contract compiled with{" "}
-					<code className="bg-gray-800 px-1 rounded">solc</code> and deployed via the
-					eth-rpc proxy. Uses <code className="bg-gray-800 px-1 rounded">viem</code> for
-					contract interaction.
+					<code className="rounded border border-white/[0.08] bg-white/[0.04] px-1.5 py-0.5 text-xs font-mono">
+						solc
+					</code>{" "}
+					and deployed via the eth-rpc proxy. Uses{" "}
+					<code className="rounded border border-white/[0.08] bg-white/[0.04] px-1.5 py-0.5 text-xs font-mono">
+						viem
+					</code>{" "}
+					for contract interaction.
 				</>
 			}
 			contractKind="evm"

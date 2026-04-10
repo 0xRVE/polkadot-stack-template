@@ -38,7 +38,6 @@ export default function HomePage() {
 	}, [connected, wsUrl]);
 
 	async function handleConnect() {
-		setEthRpcUrl(ethRpcInput);
 		setConnecting(true);
 		setError(null);
 		setChainName(null);
@@ -59,37 +58,42 @@ export default function HomePage() {
 		const endpoints = getNetworkPresetEndpoints(preset);
 		setUrlInput(endpoints.wsUrl);
 		setEthRpcInput(endpoints.ethRpcUrl);
+		setEthRpcUrl(endpoints.ethRpcUrl);
 	}
 
 	return (
-		<div className="space-y-6">
-			<h1 className="text-3xl font-bold">Polkadot Stack Template</h1>
-			<p className="text-gray-400">
-				A developer starter template demonstrating Proof of Existence implemented three
-				ways: as a Substrate pallet, a Solidity EVM contract, and a PVM contract (Solidity
-				compiled via resolc). Drop a file to claim its hash on-chain.
-			</p>
+		<div className="space-y-8 animate-fade-in">
+			{/* Hero */}
+			<div className="space-y-3">
+				<h1 className="page-title">
+					Polkadot Stack{" "}
+					<span className="bg-gradient-to-r from-polka-400 to-polka-600 bg-clip-text text-transparent">
+						Template
+					</span>
+				</h1>
+				<p className="text-text-secondary text-base leading-relaxed max-w-2xl">
+					A developer starter template demonstrating Proof of Existence implemented three
+					ways: as a Substrate pallet, a Solidity EVM contract, and a PVM contract. Drop a
+					file to claim its hash on-chain.
+				</p>
+			</div>
 
-			<div className="bg-gray-900 rounded-lg p-5 border border-gray-800 space-y-4">
+			{/* Connection card */}
+			<div className="card space-y-5">
 				<div className="flex flex-wrap gap-2">
-					<button
-						onClick={() => applyPreset("local")}
-						className="px-3 py-1.5 bg-gray-800 hover:bg-gray-700 rounded text-sm text-gray-200"
-					>
+					<button onClick={() => applyPreset("local")} className="btn-secondary text-xs">
 						Use Local Dev
 					</button>
 					<button
 						onClick={() => applyPreset("testnet")}
-						className="px-3 py-1.5 bg-gray-800 hover:bg-gray-700 rounded text-sm text-gray-200"
+						className="btn-secondary text-xs"
 					>
 						Use Hub TestNet
 					</button>
 				</div>
 
 				<div>
-					<label className="text-sm text-gray-400 block mb-1">
-						Substrate WebSocket Endpoint
-					</label>
+					<label className="label">Substrate WebSocket Endpoint</label>
 					<div className="flex gap-2">
 						<input
 							type="text"
@@ -97,12 +101,12 @@ export default function HomePage() {
 							onChange={(e) => setUrlInput(e.target.value)}
 							onKeyDown={(e) => e.key === "Enter" && handleConnect()}
 							placeholder={LOCAL_WS_URL}
-							className="bg-gray-800 border border-gray-700 rounded px-3 py-2 text-white flex-1 font-mono text-sm"
+							className="input-field flex-1"
 						/>
 						<button
 							onClick={handleConnect}
 							disabled={connecting}
-							className="px-4 py-2 bg-pink-600 hover:bg-pink-700 disabled:opacity-50 rounded text-white text-sm"
+							className="btn-primary"
 						>
 							{connecting ? "Connecting..." : "Connect"}
 						</button>
@@ -110,73 +114,73 @@ export default function HomePage() {
 				</div>
 
 				<div>
-					<label className="text-sm text-gray-400 block mb-1">
-						Ethereum JSON-RPC Endpoint
-					</label>
+					<label className="label">Ethereum JSON-RPC Endpoint</label>
 					<input
 						type="text"
 						value={ethRpcInput}
-						onChange={(e) => setEthRpcInput(e.target.value)}
+						onChange={(e) => {
+							setEthRpcInput(e.target.value);
+							setEthRpcUrl(e.target.value);
+						}}
 						placeholder={LOCAL_ETH_RPC_URL}
-						className="bg-gray-800 border border-gray-700 rounded px-3 py-2 text-white w-full font-mono text-sm"
+						className="input-field w-full"
 					/>
-					<p className="text-xs text-gray-500 mt-2">
+					<p className="text-xs text-text-muted mt-2">
 						Used by the EVM and PVM contract pages.
 					</p>
 				</div>
 
-				<div className="grid grid-cols-1 md:grid-cols-4 gap-4">
-					<div>
-						<h3 className="text-sm font-medium text-gray-400 mb-1">Chain Status</h3>
-						<p className="text-xl font-bold">
-							{error ? (
-								<span className="text-red-400 text-sm">{error}</span>
-							) : connected ? (
-								<span className="text-green-400">Connected</span>
-							) : connecting ? (
-								<span className="text-yellow-400">Connecting...</span>
-							) : (
-								<span className="text-gray-500">Disconnected</span>
-							)}
-						</p>
-					</div>
-					<div>
-						<h3 className="text-sm font-medium text-gray-400 mb-1">Chain Name</h3>
-						<p className="text-xl font-bold">{chainName || "..."}</p>
-					</div>
-					<div>
-						<h3 className="text-sm font-medium text-gray-400 mb-1">Latest Block</h3>
-						<p className="text-xl font-bold font-mono">#{blockNumber}</p>
-					</div>
-					<div>
-						<h3 className="text-sm font-medium text-gray-400 mb-1">Contract RPC</h3>
-						<p className="text-sm font-mono text-gray-300 break-all">{ethRpcUrl}</p>
-					</div>
+				{/* Status grid */}
+				<div className="grid grid-cols-1 md:grid-cols-3 gap-4">
+					<StatusItem label="Chain Status">
+						{error ? (
+							<span className="text-accent-red text-sm">{error}</span>
+						) : connected ? (
+							<span className="text-accent-green flex items-center gap-1.5">
+								<span className="w-1.5 h-1.5 rounded-full bg-accent-green animate-pulse-slow" />
+								Connected
+							</span>
+						) : connecting ? (
+							<span className="text-accent-yellow">Connecting...</span>
+						) : (
+							<span className="text-text-muted">Disconnected</span>
+						)}
+					</StatusItem>
+					<StatusItem label="Chain Name">
+						{chainName || <span className="text-text-muted">...</span>}
+					</StatusItem>
+					<StatusItem label="Latest Block">
+						<span className="font-mono">#{blockNumber}</span>
+					</StatusItem>
 				</div>
 			</div>
 
+			{/* Feature cards */}
 			<div className="grid grid-cols-1 md:grid-cols-3 gap-4">
-				<Card
+				<FeatureCard
 					title="Pallet PoE"
 					description="Claim file hashes via the Substrate FRAME pallet using PAPI."
 					link="/pallet"
-					color="text-blue-400"
+					accentColor="text-accent-blue"
+					borderColor="hover:border-accent-blue/20"
 					available={pallets.templatePallet}
 					unavailableReason="TemplatePallet not found in connected runtime"
 				/>
-				<Card
+				<FeatureCard
 					title="EVM PoE (solc)"
 					description="Same proof of existence via Solidity compiled with solc, deployed to the EVM backend."
 					link="/evm"
-					color="text-purple-400"
+					accentColor="text-accent-purple"
+					borderColor="hover:border-accent-purple/20"
 					available={pallets.revive}
 					unavailableReason="pallet-revive not found in connected runtime"
 				/>
-				<Card
+				<FeatureCard
 					title="PVM PoE (resolc)"
 					description="Same Solidity contract compiled with resolc to PolkaVM bytecode, deployed via pallet-revive."
 					link="/pvm"
-					color="text-green-400"
+					accentColor="text-accent-green"
+					borderColor="hover:border-accent-green/20"
 					available={pallets.revive}
 					unavailableReason="pallet-revive not found in connected runtime"
 				/>
@@ -185,31 +189,44 @@ export default function HomePage() {
 	);
 }
 
-function Card({
+function StatusItem({ label, children }: { label: string; children: React.ReactNode }) {
+	return (
+		<div>
+			<h3 className="text-xs font-medium text-text-tertiary uppercase tracking-wider mb-1">
+				{label}
+			</h3>
+			<p className="text-lg font-semibold text-text-primary">{children}</p>
+		</div>
+	);
+}
+
+function FeatureCard({
 	title,
 	description,
 	link,
-	color,
+	accentColor,
+	borderColor,
 	available,
 	unavailableReason,
 }: {
 	title: string;
 	description: string;
 	link: string;
-	color: string;
+	accentColor: string;
+	borderColor: string;
 	available: boolean | null;
 	unavailableReason: string;
 }) {
 	if (available !== true) {
 		return (
-			<div className="bg-gray-900 rounded-lg p-5 border border-gray-800 opacity-50">
-				<h3 className="text-lg font-semibold mb-2 text-gray-500">{title}</h3>
-				<p className="text-sm text-gray-500">{description}</p>
-				<p className="text-xs mt-2">
+			<div className="card opacity-40">
+				<h3 className="text-lg font-semibold mb-2 text-text-muted font-display">{title}</h3>
+				<p className="text-sm text-text-muted">{description}</p>
+				<p className="text-xs mt-3">
 					{available === null ? (
-						<span className="text-yellow-400">Detecting...</span>
+						<span className="text-accent-yellow">Detecting...</span>
 					) : (
-						<span className="text-red-400">{unavailableReason}</span>
+						<span className="text-accent-red">{unavailableReason}</span>
 					)}
 				</p>
 			</div>
@@ -217,12 +234,11 @@ function Card({
 	}
 
 	return (
-		<a
-			href={`#${link}`}
-			className="bg-gray-900 rounded-lg p-5 border border-gray-800 hover:border-gray-600 transition-colors block"
-		>
-			<h3 className={`text-lg font-semibold mb-2 ${color}`}>{title}</h3>
-			<p className="text-sm text-gray-400">{description}</p>
+		<a href={`#${link}`} className={`card-hover block group ${borderColor}`}>
+			<h3 className={`text-lg font-semibold mb-2 font-display ${accentColor}`}>{title}</h3>
+			<p className="text-sm text-text-secondary group-hover:text-text-primary transition-colors">
+				{description}
+			</p>
 		</a>
 	);
 }

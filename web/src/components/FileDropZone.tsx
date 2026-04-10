@@ -61,45 +61,54 @@ export default function FileDropZone({
 	}
 
 	return (
-		<div className="space-y-2">
+		<div className="space-y-3">
 			<div
 				onDrop={handleDrop}
 				onDragOver={handleDragOver}
 				onDragLeave={() => setDragging(false)}
-				className={`border-2 border-dashed rounded-lg p-6 text-center transition-colors cursor-pointer ${
+				className={`border-2 border-dashed rounded-xl p-8 text-center transition-all duration-300 cursor-pointer ${
 					dragging
-						? "border-pink-500 bg-pink-500/10"
-						: "border-gray-700 hover:border-gray-500"
+						? "border-polka-500 bg-polka-500/[0.06] shadow-glow"
+						: "border-white/[0.08] hover:border-white/[0.15] hover:bg-white/[0.02]"
 				}`}
 			>
 				<input type="file" onChange={handleFileInput} className="hidden" id="file-input" />
 				<label htmlFor="file-input" className="cursor-pointer">
 					{hashing ? (
-						<p className="text-yellow-400">Hashing...</p>
+						<p className="text-accent-yellow font-medium">Hashing...</p>
 					) : fileName ? (
-						<p className="text-gray-300">
+						<p className="text-text-primary">
 							{fileName}{" "}
-							<span className="text-gray-500 text-sm">(drop another to replace)</span>
+							<span className="text-text-muted text-sm">
+								(drop another to replace)
+							</span>
 						</p>
 					) : (
-						<p className="text-gray-400">Drop a file here or click to select</p>
+						<div className="space-y-1">
+							<p className="text-text-secondary font-medium">
+								Drop a file here or click to select
+							</p>
+							<p className="text-text-muted text-xs">
+								The file will be hashed locally with Blake2b-256
+							</p>
+						</div>
 					)}
 				</label>
 			</div>
 			{showUploadToggle && (
-				<label className="flex items-center gap-2 text-sm text-gray-400 cursor-pointer">
+				<label className="flex items-center gap-2 text-sm text-text-secondary cursor-pointer">
 					<input
 						type="checkbox"
 						checked={uploadToIpfs ?? false}
 						onChange={(e) => onUploadToggle?.(e.target.checked)}
-						className="rounded border-gray-600"
+						className="rounded border-white/[0.15] bg-white/[0.04] text-polka-500 focus:ring-polka-500/30"
 					/>
 					Upload file to IPFS (via Bulletin Chain)
 					<a
 						href="https://paritytech.github.io/polkadot-bulletin-chain/"
 						target="_blank"
 						rel="noopener noreferrer"
-						className="text-gray-600 text-xs hover:text-gray-400 underline"
+						className="text-text-muted text-xs hover:text-text-secondary underline"
 					>
 						— requires authorization, expires ~7 days
 					</a>
@@ -107,17 +116,17 @@ export default function FileDropZone({
 			)}
 			{showStatementStoreToggle && (
 				<label
-					className={`flex items-center gap-2 text-sm cursor-pointer ${statementStoreDisabled ? "text-gray-600" : "text-gray-400"}`}
+					className={`flex items-center gap-2 text-sm cursor-pointer ${statementStoreDisabled ? "text-text-muted" : "text-text-secondary"}`}
 				>
 					<input
 						type="checkbox"
 						checked={uploadToStatementStore ?? false}
 						onChange={(e) => onStatementStoreToggle?.(e.target.checked)}
 						disabled={statementStoreDisabled}
-						className="rounded border-gray-600"
+						className="rounded border-white/[0.15] bg-white/[0.04] text-polka-500 focus:ring-polka-500/30"
 					/>
 					Submit file to Statement Store
-					<span className="text-gray-600 text-xs">
+					<span className="text-text-muted text-xs">
 						{statementStoreDisabled
 							? "— not available (node lacks statement_submit RPC)"
 							: "— propagates to connected nodes, short-term"}
