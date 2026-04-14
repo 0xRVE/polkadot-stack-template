@@ -1,5 +1,6 @@
 #![cfg_attr(not(feature = "abi-gen"), no_main, no_std)]
 
+use dex_router_encoding::{bytes_array_encoded_size, encode_bytes_array, MAX_SWAP_PATH};
 use ruint::aliases::U256;
 
 #[pvm_contract_macros::contract("DexRouter.sol", allocator = "bump", allocator_size = 4096)]
@@ -19,6 +20,7 @@ mod dex_router {
         PrecompileCallFailed,
         SlippageExceeded,
         UnknownSelector,
+        PathTooLong,
     }
 
     impl AsRef<[u8]> for Error {
@@ -27,6 +29,7 @@ mod dex_router {
                 Error::PrecompileCallFailed => b"PrecompileCallFailed",
                 Error::SlippageExceeded => b"SlippageExceeded",
                 Error::UnknownSelector => b"UnknownSelector",
+                Error::PathTooLong => b"PathTooLong",
             }
         }
     }
@@ -44,6 +47,9 @@ mod dex_router {
         amount_in: U256,
         amount_out_min: U256,
     ) -> Result<U256, Error> {
+        if path.len() > MAX_SWAP_PATH {
+            return Err(Error::PathTooLong);
+        }
         let caller = get_caller();
         let path_refs: Vec<&[u8]> = path.iter().map(|p| p.as_slice()).collect();
         let calldata = build_swap_exact_in(&path_refs, amount_in, amount_out_min, &caller, false);
@@ -59,6 +65,9 @@ mod dex_router {
         amount_out: U256,
         amount_in_max: U256,
     ) -> Result<U256, Error> {
+        if path.len() > MAX_SWAP_PATH {
+            return Err(Error::PathTooLong);
+        }
         let caller = get_caller();
         let path_refs: Vec<&[u8]> = path.iter().map(|p| p.as_slice()).collect();
         let calldata =
@@ -233,52 +242,6 @@ mod dex_router {
             api::return_value(ReturnFlags::REVERT, &sig);
         }
         output
-    }
-
-    // === ABI encoding helpers ===
-
-    fn bytes_array_encoded_size(items: &[&[u8]]) -> usize {
-        let n = items.len();
-        let mut size = 32 + n * 32;
-        for item in items {
-            size += 32 + ((item.len() + 31) / 32) * 32;
-        }
-        size
-    }
-
-    fn encode_bytes_array(items: &[&[u8]], buf: &mut [u8], offset: usize) {
-        let n = items.len();
-        let mut pos = offset;
-
-        let mut len_word = [0u8; 32];
-        len_word[31] = n as u8;
-        buf[pos..pos + 32].copy_from_slice(&len_word);
-        pos += 32;
-
-        let offsets_start = pos;
-        let mut offsets = [0usize; 8];
-        let mut data_pos = offsets_start + n * 32;
-
-        for i in 0..n {
-            offsets[i] = data_pos - offsets_start;
-            let item = items[i];
-            let mut item_len = [0u8; 32];
-            item_len[28..32].copy_from_slice(&(item.len() as u32).to_be_bytes());
-            buf[data_pos..data_pos + 32].copy_from_slice(&item_len);
-            data_pos += 32;
-            buf[data_pos..data_pos + item.len()].copy_from_slice(item);
-            let padded = ((item.len() + 31) / 32) * 32;
-            for j in item.len()..padded {
-                buf[data_pos + j] = 0;
-            }
-            data_pos += padded;
-        }
-
-        for i in 0..n {
-            let mut off_word = [0u8; 32];
-            off_word[28..32].copy_from_slice(&(offsets[i] as u32).to_be_bytes());
-            buf[offsets_start + i * 32..offsets_start + i * 32 + 32].copy_from_slice(&off_word);
-        }
     }
 
     /// Common encoder: selector + 2 bytes params (with offsets) + N static words
@@ -458,4 +421,5 @@ mod dex_router {
         t[12..32].copy_from_slice(provider);
         api::deposit_event(&[sig, t], &encode_u256(lp));
     }
+
 }

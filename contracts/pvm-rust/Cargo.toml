@@ -11,6 +11,10 @@ build = "build.rs"
 name = "dex-router"
 path = "src/dex-router.rs"
 
+[lib]
+name = "dex_router_encoding"
+path = "src/encoding.rs"
+
 [dependencies]
 pvm-contract-macros = { path = "/Users/robert/code/cargo-pvm-contract/crates/pvm-contract-macros" }
 pvm-contract-types = { path = "/Users/robert/code/cargo-pvm-contract/crates/pvm-contract-types", features = ["alloc"] }
