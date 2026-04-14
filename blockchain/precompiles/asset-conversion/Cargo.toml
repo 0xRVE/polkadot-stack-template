@@ -1,0 +1,33 @@
+[package]
+name = "pallet-asset-conversion-precompiles"
+version = "0.1.0"
+edition.workspace = true
+license.workspace = true
+publish = false
+description = "Precompiles for pallet-asset-conversion, vendored from polkadot-sdk PR #11590/#11690."
+
+[dependencies]
+codec = { workspace = true }
+polkadot-sdk = { workspace = true, features = [
+	"frame-support",
+	"frame-system",
+	"pallet-asset-conversion",
+	"pallet-revive",
+	"sp-core",
+	"sp-runtime",
+] }
+scale-info = { workspace = true }
+
+[features]
+default = ["std"]
+std = [
+	"codec/std",
+	"polkadot-sdk/std",
+	"scale-info/std",
+]
+runtime-benchmarks = [
+	"polkadot-sdk/runtime-benchmarks",
+]
+try-runtime = [
+	"polkadot-sdk/try-runtime",
+]

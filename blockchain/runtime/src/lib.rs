@@ -252,6 +252,12 @@ mod runtime {
 	#[runtime::pallet_index(50)]
 	pub type TemplatePallet = pallet_template;
 
+	// Fungible assets + DEX
+	#[runtime::pallet_index(60)]
+	pub type Assets = pallet_assets;
+	#[runtime::pallet_index(61)]
+	pub type AssetConversion = pallet_asset_conversion;
+
 	// Smart contracts (EVM + PVM via pallet-revive)
 	#[runtime::pallet_index(90)]
 	pub type Revive = pallet_revive;

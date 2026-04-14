@@ -1,6 +1,7 @@
 use crate::{
-	AccountId, BalancesConfig, CollatorSelectionConfig, ParachainInfoConfig, PolkadotXcmConfig,
-	RuntimeGenesisConfig, SessionConfig, SessionKeys, SudoConfig, EXISTENTIAL_DEPOSIT,
+	AccountId, AssetsConfig, BalancesConfig, CollatorSelectionConfig, ParachainInfoConfig,
+	PolkadotXcmConfig, RuntimeGenesisConfig, SessionConfig, SessionKeys, SudoConfig,
+	EXISTENTIAL_DEPOSIT,
 };
 
 use alloc::{vec, vec::Vec};
@@ -25,12 +26,18 @@ pub fn template_session_keys(keys: AuraId) -> SessionKeys {
 	SessionKeys { aura: keys }
 }
 
+/// Test asset IDs for the DEX.
+pub const TEST_ASSET_A: u32 = 1;
+pub const TEST_ASSET_B: u32 = 2;
+
 fn testnet_genesis(
 	invulnerables: Vec<(AccountId, AuraId)>,
 	endowed_accounts: Vec<AccountId>,
 	root: AccountId,
 	id: ParaId,
 ) -> Value {
+	let alice = Sr25519Keyring::Alice.to_account_id();
+
 	build_struct_json_patch!(RuntimeGenesisConfig {
 		balances: BalancesConfig {
 			balances: endowed_accounts
@@ -52,6 +59,26 @@ fn testnet_genesis(
 		},
 		polkadot_xcm: PolkadotXcmConfig { safe_xcm_version: Some(SAFE_XCM_VERSION) },
 		sudo: SudoConfig { key: Some(root) },
+		assets: AssetsConfig {
+			assets: vec![
+				(TEST_ASSET_A, alice.clone(), true, 1),
+				(TEST_ASSET_B, alice.clone(), true, 1),
+			],
+			metadata: vec![
+				(TEST_ASSET_A, b"Test Token A".to_vec(), b"TSTA".to_vec(), 12),
+				(TEST_ASSET_B, b"Test Token B".to_vec(), b"TSTB".to_vec(), 12),
+			],
+			accounts: endowed_accounts
+				.iter()
+				.cloned()
+				.flat_map(|acc| {
+					vec![
+						(TEST_ASSET_A, acc.clone(), 1u128 << 60),
+						(TEST_ASSET_B, acc, 1u128 << 60),
+					]
+				})
+				.collect(),
+		},
 	})
 }
 

@@ -8852,6 +8852,15 @@ dependencies = [
 ]
 
 [[package]]
+name = "pallet-asset-conversion-precompiles"
+version = "0.1.0"
+dependencies = [
+ "parity-scale-codec",
+ "polkadot-sdk 2512.3.3",
+ "scale-info",
+]
+
+[[package]]
 name = "pallet-asset-conversion-tx-payment"
 version = "27.0.1"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -18125,6 +18134,7 @@ dependencies = [
  "cumulus-pallet-parachain-system",
  "hex-literal",
  "log",
+ "pallet-asset-conversion-precompiles",
  "pallet-template",
  "parity-scale-codec",
  "polkadot-sdk 2512.3.3",

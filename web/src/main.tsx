@@ -8,6 +8,7 @@ const HomePage = lazy(() => import("./pages/HomePage"));
 const PalletPage = lazy(() => import("./pages/PalletPage"));
 const EvmContractPage = lazy(() => import("./pages/EvmContractPage"));
 const PvmContractPage = lazy(() => import("./pages/PvmContractPage"));
+const DexPage = lazy(() => import("./pages/DexPage"));
 const AccountsPage = lazy(() => import("./pages/AccountsPage"));
 const StatementStorePage = lazy(() => import("./pages/StatementStorePage"));
 
@@ -52,6 +53,14 @@ createRoot(document.getElementById("root")!).render(
 						element={
 							<Suspense fallback={routeFallback}>
 								<PvmContractPage />
+							</Suspense>
+						}
+					/>
+					<Route
+						path="dex"
+						element={
+							<Suspense fallback={routeFallback}>
+								<DexPage />
 							</Suspense>
 						}
 					/>

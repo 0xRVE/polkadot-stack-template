@@ -9,7 +9,8 @@ use frame_support::{
 	dispatch::DispatchClass,
 	parameter_types,
 	traits::{
-		ConstBool, ConstU32, ConstU64, ConstU8, EitherOfDiverse, TransformOrigin, VariantCountOf,
+		ConstBool, ConstU128, ConstU32, ConstU64, ConstU8, EitherOfDiverse, TransformOrigin,
+		VariantCountOf,
 	},
 	weights::{ConstantMultiplier, Weight},
 	PalletId,
@@ -24,17 +25,18 @@ use polkadot_runtime_common::{
 	xcm_sender::NoPriceForMessageDelivery, BlockHashCount, SlowAdjustingFeeUpdate,
 };
 use sp_consensus_aura::sr25519::AuthorityId as AuraId;
-use sp_runtime::Perbill;
+use sp_runtime::{Perbill, Permill};
 use sp_version::RuntimeVersion;
 use xcm::latest::prelude::BodyId;
 
 use super::{
 	weights::{BlockExecutionWeight, ExtrinsicBaseWeight, RocksDbWeight},
-	AccountId, Aura, Balance, Balances, Block, BlockNumber, CollatorSelection, ConsensusHook, Hash,
-	MessageQueue, Nonce, PalletInfo, ParachainSystem, Runtime, RuntimeCall, RuntimeEvent,
-	RuntimeFreezeReason, RuntimeHoldReason, RuntimeOrigin, RuntimeTask, Session, SessionKeys,
-	System, Timestamp, XcmpQueue, AVERAGE_ON_INITIALIZE_RATIO, EXISTENTIAL_DEPOSIT, HOURS,
-	MAXIMUM_BLOCK_WEIGHT, MICRO_UNIT, NORMAL_DISPATCH_RATIO, SLOT_DURATION, VERSION,
+	AccountId, Assets, AssetConversion, Aura, Balance, Balances, Block, BlockNumber,
+	CollatorSelection, ConsensusHook, Hash, MessageQueue, Nonce, PalletInfo, ParachainSystem,
+	Runtime, RuntimeCall, RuntimeEvent, RuntimeFreezeReason, RuntimeHoldReason, RuntimeOrigin,
+	RuntimeTask, Session, SessionKeys, System, Timestamp, XcmpQueue,
+	AVERAGE_ON_INITIALIZE_RATIO, EXISTENTIAL_DEPOSIT, HOURS, MAXIMUM_BLOCK_WEIGHT, MICRO_UNIT,
+	NORMAL_DISPATCH_RATIO, SLOT_DURATION, VERSION,
 };
 use xcm_config::{RelayLocation, XcmOriginToTransactDispatchOrigin};
 
@@ -291,6 +293,96 @@ impl pallet_template::Config for Runtime {
 	type WeightInfo = pallet_template::weights::SubstrateWeight<Runtime>;
 }
 
+// ── pallet-assets (fungible tokens for DEX) ───────────────────────────
+
+impl pallet_assets::Config for Runtime {
+	type RuntimeEvent = RuntimeEvent;
+	type Balance = Balance;
+	type AssetId = u32;
+	type AssetIdParameter = codec::Compact<u32>;
+	type Currency = Balances;
+	type CreateOrigin = frame_support::traits::AsEnsureOriginWithArg<EnsureSigned<AccountId>>;
+	type ForceOrigin = EnsureRoot<AccountId>;
+	type AssetDeposit = ConstU128<{ EXISTENTIAL_DEPOSIT }>;
+	type AssetAccountDeposit = ConstU128<{ EXISTENTIAL_DEPOSIT }>;
+	type MetadataDepositBase = ConstU128<{ EXISTENTIAL_DEPOSIT }>;
+	type MetadataDepositPerByte = ConstU128<{ MICRO_UNIT }>;
+	type ApprovalDeposit = ConstU128<{ EXISTENTIAL_DEPOSIT }>;
+	type StringLimit = ConstU32<50>;
+	type Freezer = ();
+	type Extra = ();
+	type CallbackHandle = ();
+	type WeightInfo = pallet_assets::weights::SubstrateWeight<Runtime>;
+	type RemoveItemsLimit = ConstU32<1000>;
+	type ReserveData = ();
+	type Holder = ();
+	#[cfg(feature = "runtime-benchmarks")]
+	type BenchmarkHelper = ();
+}
+
+// ── pallet-asset-conversion (DEX) ─────────────────────────────────────
+
+/// Asset type: either the native token or a pallet-assets ID.
+pub type NativeOrWithId = frame_support::traits::tokens::fungible::NativeOrWithId<u32>;
+
+parameter_types! {
+	pub const AssetConversionPalletId: PalletId = PalletId(*b"py/ascon");
+	pub const LiquidityWithdrawalFee: Permill = Permill::from_percent(0);
+	pub const MaxSwapPathLength: u32 = 4;
+	pub const MintMinLiquidity: Balance = 100;
+	pub const PoolSetupFee: Balance = 0;
+	pub const LPFee: u32 = 3; // 0.3%
+}
+
+/// Adapter to combine native Balances with pallet-assets into a single fungibles API.
+pub type NativeAndAssets = frame_support::traits::fungible::UnionOf<
+	Balances,
+	Assets,
+	frame_support::traits::tokens::fungible::NativeFromLeft,
+	NativeOrWithId,
+	AccountId,
+>;
+
+/// Pool locator: ascending order for any pair.
+pub type PoolLocator = pallet_asset_conversion::Ascending<
+	AccountId,
+	NativeOrWithId,
+	pallet_asset_conversion::AccountIdConverter<
+		AssetConversionPalletId,
+		(NativeOrWithId, NativeOrWithId),
+	>,
+>;
+
+pub struct NativeAssetId;
+impl frame_support::traits::Get<NativeOrWithId> for NativeAssetId {
+	fn get() -> NativeOrWithId {
+		NativeOrWithId::Native
+	}
+}
+
+impl pallet_asset_conversion::Config for Runtime {
+	type RuntimeEvent = RuntimeEvent;
+	type Balance = Balance;
+	type HigherPrecisionBalance = sp_core::U256;
+	type AssetKind = NativeOrWithId;
+	type Assets = NativeAndAssets;
+	type PoolId = (NativeOrWithId, NativeOrWithId);
+	type PoolLocator = PoolLocator;
+	type PoolAssetId = u32;
+	type PoolAssets = Assets;
+	type PoolSetupFee = PoolSetupFee;
+	type PoolSetupFeeAsset = NativeAssetId;
+	type PoolSetupFeeTarget = ();
+	type PalletId = AssetConversionPalletId;
+	type LPFee = LPFee;
+	type LiquidityWithdrawalFee = LiquidityWithdrawalFee;
+	type MaxSwapPathLength = MaxSwapPathLength;
+	type MintMinLiquidity = MintMinLiquidity;
+	type WeightInfo = pallet_asset_conversion::weights::SubstrateWeight<Runtime>;
+	#[cfg(feature = "runtime-benchmarks")]
+	type BenchmarkHelper = ();
+}
+
 // ── pallet-revive (EVM + PVM smart contracts) ──────────────────────────
 
 parameter_types! {
@@ -312,7 +404,9 @@ impl pallet_revive::Config for Runtime {
 	type DepositPerChildTrieItem = DepositPerChildTrieItem;
 	type DepositPerByte = DepositPerByte;
 	type WeightInfo = pallet_revive::weights::SubstrateWeight<Self>;
-	type Precompiles = ();
+	type Precompiles = (
+		pallet_asset_conversion_precompiles::AssetConversion<0x0420, Self>,
+	);
 	type AddressMapper = pallet_revive::AccountId32Mapper<Self>;
 	type RuntimeMemory = ConstU32<{ 128 * 1024 * 1024 }>;
 	type PVFMemory = ConstU32<{ 512 * 1024 * 1024 }>;
