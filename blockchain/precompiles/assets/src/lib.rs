@@ -107,14 +107,12 @@ where
 				if env.is_read_only() =>
 			{
 				Err(Error::Error(pallet_revive::Error::<Self::T>::StateChangeDenied.into()))
-			}
+			},
 			IERC20Calls::transfer(_) | IERC20Calls::approve(_) | IERC20Calls::transferFrom(_)
 				if env.is_delegate_call() =>
 			{
-				Err(Error::Error(
-					pallet_revive::Error::<Self::T>::PrecompileDelegateDenied.into(),
-				))
-			}
+				Err(Error::Error(pallet_revive::Error::<Self::T>::PrecompileDelegateDenied.into()))
+			},
 
 			IERC20Calls::transfer(call) => Self::transfer(asset_id, call, env),
 			IERC20Calls::totalSupply(_) => Self::total_supply(asset_id, env),
@@ -295,7 +293,11 @@ where
 		let to = <Runtime as pallet_revive::Config>::AddressMapper::to_account_id(&to);
 
 		pallet_assets::Pallet::<Runtime, Instance>::do_transfer_approved(
-			asset_id, &from, &spender, &to, Self::to_balance(call.value)?,
+			asset_id,
+			&from,
+			&spender,
+			&to,
+			Self::to_balance(call.value)?,
 		)?;
 
 		Self::deposit_event(

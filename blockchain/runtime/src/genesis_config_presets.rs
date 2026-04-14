@@ -72,10 +72,7 @@ fn testnet_genesis(
 				.iter()
 				.cloned()
 				.flat_map(|acc| {
-					vec![
-						(TEST_ASSET_A, acc.clone(), 1u128 << 60),
-						(TEST_ASSET_B, acc, 1u128 << 60),
-					]
+					vec![(TEST_ASSET_A, acc.clone(), 1u128 << 60), (TEST_ASSET_B, acc, 1u128 << 60)]
 				})
 				.collect(),
 		},
