@@ -1,0 +1,158 @@
+name: CI — E2E DEX Router
+
+on:
+  push:
+    branches: [main, master]
+    paths:
+      - "blockchain/**"
+      - "contracts/pvm-rust/**"
+      - ".github/workflows/ci-e2e-dex.yml"
+  pull_request:
+    branches: [main, master]
+    paths:
+      - "blockchain/**"
+      - "contracts/pvm-rust/**"
+      - ".github/workflows/ci-e2e-dex.yml"
+  workflow_dispatch:
+
+concurrency:
+  group: ci-e2e-dex-${{ github.ref }}
+  cancel-in-progress: true
+
+env:
+  CARGO_TERM_COLOR: always
+  STACK_SDK_RELEASE_TAG: polkadot-stable2512-3
+
+jobs:
+  e2e:
+    name: DEX Router E2E
+    runs-on: ubuntu-latest
+    timeout-minutes: 45
+
+    steps:
+      - uses: actions/checkout@v4
+
+      # -- Rust toolchain --
+      - uses: actions/cache@v4
+        with:
+          path: |
+            ~/.cargo/registry
+            ~/.cargo/git
+            target
+          key: e2e-dex-${{ hashFiles('**/Cargo.lock') }}
+          restore-keys: e2e-dex-
+
+      - name: Install rust-src (needed for PVM contract build-std)
+        run: rustup component add rust-src
+
+      # -- Node.js --
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+
+      # -- Build runtime --
+      - name: Build runtime
+        run: cargo build -p stack-template-runtime --release
+
+      # -- Build PVM contract --
+      - name: Build DexRouter PVM contract
+        working-directory: contracts/pvm-rust
+        run: RUSTC_BOOTSTRAP=1 cargo build --release
+
+      # -- Download SDK binaries --
+      - name: Download polkadot-omni-node, eth-rpc, chain-spec-builder
+        run: |
+          mkdir -p bin
+          for binary in polkadot-omni-node eth-rpc chain-spec-builder; do
+            url="https://github.com/paritytech/polkadot-sdk/releases/download/${STACK_SDK_RELEASE_TAG}/${binary}"
+            echo "Downloading ${binary}..."
+            curl -sSfL -o "bin/${binary}" "${url}"
+            chmod +x "bin/${binary}"
+          done
+          echo "$PWD/bin" >> "$GITHUB_PATH"
+
+      # -- Generate chain spec --
+      - name: Generate chain spec
+        run: |
+          RUNTIME_WASM="target/release/wbuild/stack-template-runtime/stack_template_runtime.compact.compressed.wasm"
+          chain-spec-builder \
+            -c blockchain/chain_spec.json \
+            create \
+            --chain-name "Polkadot Stack Template" \
+            --chain-id "polkadot-stack-template" \
+            -t development \
+            --relay-chain rococo-local \
+            --para-id 1000 \
+            --runtime "$RUNTIME_WASM" \
+            named-preset development
+
+      # -- Start node --
+      - name: Start polkadot-omni-node
+        run: |
+          polkadot-omni-node \
+            --chain blockchain/chain_spec.json \
+            --tmp \
+            --alice \
+            --force-authoring \
+            --dev-block-time 3000 \
+            --no-prometheus \
+            --unsafe-force-node-key-generation \
+            --rpc-cors all \
+            --rpc-port 9944 \
+            -- &
+          echo "NODE_PID=$!" >> "$GITHUB_ENV"
+
+      - name: Wait for Substrate RPC
+        run: |
+          for i in $(seq 1 60); do
+            if curl -sf -H "Content-Type: application/json" \
+              -d '{"jsonrpc":"2.0","id":1,"method":"chain_getHeader","params":[]}' \
+              http://127.0.0.1:9944 >/dev/null 2>&1; then
+              echo "Substrate RPC ready after ${i}s"
+              exit 0
+            fi
+            sleep 1
+          done
+          echo "Substrate RPC not ready after 60s"
+          exit 1
+
+      # -- Start eth-rpc --
+      - name: Start eth-rpc
+        run: |
+          eth-rpc \
+            --node-rpc-url ws://127.0.0.1:9944 \
+            --rpc-port 8545 \
+            --no-prometheus \
+            --rpc-cors all \
+            --dev &
+          echo "ETH_RPC_PID=$!" >> "$GITHUB_ENV"
+
+      - name: Wait for Ethereum RPC
+        run: |
+          for i in $(seq 1 60); do
+            if curl -sf -H "Content-Type: application/json" \
+              -d '{"jsonrpc":"2.0","id":1,"method":"eth_blockNumber","params":[]}' \
+              http://127.0.0.1:8545 >/dev/null 2>&1; then
+              echo "Ethereum RPC ready after ${i}s"
+              exit 0
+            fi
+            sleep 1
+          done
+          echo "Ethereum RPC not ready after 60s"
+          exit 1
+
+      # -- Run e2e tests --
+      - name: Install e2e test dependencies
+        working-directory: contracts/pvm-rust/e2e
+        run: npm ci
+
+      - name: Run DexRouter e2e tests
+        working-directory: contracts/pvm-rust/e2e
+        run: npm test
+
+      # -- Cleanup --
+      - name: Cleanup
+        if: always()
+        run: |
+          [ -n "$ETH_RPC_PID" ] && kill "$ETH_RPC_PID" 2>/dev/null || true
+          [ -n "$NODE_PID" ] && kill "$NODE_PID" 2>/dev/null || true
