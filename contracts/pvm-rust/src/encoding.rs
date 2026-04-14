@@ -8,7 +8,6 @@
 extern crate alloc;
 
 use alloc::vec;
-use alloc::vec::Vec;
 
 /// Maximum number of assets in a swap path. The runtime limits this to 4
 /// (`MaxSwapPathLength`), but we cap at 8 to guard against allocator abuse

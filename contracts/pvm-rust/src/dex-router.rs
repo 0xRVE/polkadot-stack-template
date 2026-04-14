@@ -1,14 +1,25 @@
-#![cfg_attr(not(feature = "abi-gen"), no_main, no_std)]
+#![cfg_attr(not(any(feature = "abi-gen", test)), no_main, no_std)]
+
+#[cfg(any(feature = "abi-gen", test))]
+extern crate alloc;
 
 use dex_router_encoding::{bytes_array_encoded_size, encode_bytes_array, MAX_SWAP_PATH};
 use ruint::aliases::U256;
+
+#[cfg(test)]
+mod mock_api;
 
 #[pvm_contract_macros::contract("DexRouter.sol", allocator = "bump", allocator_size = 4096)]
 mod dex_router {
     use super::*;
     use alloc::vec;
     use alloc::vec::Vec;
+    #[cfg(not(test))]
     use pallet_revive_uapi::{CallFlags, HostFn, HostFnImpl as api, ReturnFlags};
+    #[cfg(test)]
+    use pallet_revive_uapi::{CallFlags, ReturnFlags};
+    #[cfg(test)]
+    use super::mock_api::MockApi as api;
 
     // Precompile address for asset-conversion (ADDRESS = 0x0420).
     const PRECOMPILE_ADDR: [u8; 20] = [
@@ -51,7 +62,7 @@ mod dex_router {
             return Err(Error::PathTooLong);
         }
         let caller = get_caller();
-        let path_refs: Vec<&[u8]> = path.iter().map(|p| p.as_slice()).collect();
+        let path_refs: Vec<&[u8]> = path.iter().map(|p: &Vec<u8>| p.as_slice()).collect();
         let calldata = build_swap_exact_in(&path_refs, amount_in, amount_out_min, &caller, false);
         let output = call_precompile(&calldata);
         let amount_out = decode_u256(&output);
@@ -69,7 +80,7 @@ mod dex_router {
             return Err(Error::PathTooLong);
         }
         let caller = get_caller();
-        let path_refs: Vec<&[u8]> = path.iter().map(|p| p.as_slice()).collect();
+        let path_refs: Vec<&[u8]> = path.iter().map(|p: &Vec<u8>| p.as_slice()).collect();
         let calldata =
             build_swap_exact_out(&path_refs, amount_out, amount_in_max, &caller, false);
         let output = call_precompile(&calldata);
@@ -421,5 +432,105 @@ mod dex_router {
         t[12..32].copy_from_slice(provider);
         api::deposit_event(&[sig, t], &encode_u256(lp));
     }
+}
 
+#[cfg(test)]
+mod tests {
+    use super::dex_router::*;
+    use super::mock_api;
+    use alloc::vec;
+    use alloc::vec::Vec;
+    use ruint::aliases::U256;
+
+    fn setup() {
+        mock_api::reset();
+        // Put a recognisable amount_out (1000) in the first 32 bytes of call output.
+        let mut out = [0u8; 128];
+        out[..32].copy_from_slice(&U256::from(1000u64).to_be_bytes::<32>());
+        mock_api::set_call_output(&out);
+    }
+
+    fn make_path(n: usize) -> Vec<Vec<u8>> {
+        (0..n).map(|i| vec![i as u8; 20]).collect()
+    }
+
+    // -- PathTooLong validation --
+
+    #[test]
+    fn swap_exact_in_rejects_long_path() {
+        setup();
+        let path = make_path(9);
+        let result = swap_exact_in(path, U256::from(100u64), U256::ZERO);
+        assert_eq!(result, Err(Error::PathTooLong));
+    }
+
+    #[test]
+    fn swap_exact_out_rejects_long_path() {
+        setup();
+        let path = make_path(9);
+        let result = swap_exact_out(path, U256::from(100u64), U256::MAX);
+        assert_eq!(result, Err(Error::PathTooLong));
+    }
+
+    // -- Happy path --
+
+    #[test]
+    fn swap_exact_in_succeeds() {
+        setup();
+        let path = make_path(2);
+        let result = swap_exact_in(path, U256::from(100u64), U256::ZERO);
+        assert_eq!(result, Ok(U256::from(1000u64)));
+    }
+
+    #[test]
+    fn swap_exact_out_succeeds() {
+        setup();
+        let path = make_path(2);
+        let result = swap_exact_out(path, U256::from(100u64), U256::MAX);
+        assert_eq!(result, Ok(U256::from(1000u64)));
+    }
+
+    #[test]
+    fn swap_exact_in_at_max_path_length() {
+        setup();
+        let path = make_path(8);
+        let result = swap_exact_in(path, U256::from(50u64), U256::ZERO);
+        assert!(result.is_ok());
+    }
+
+    // -- Precompile failure --
+
+    #[test]
+    #[should_panic(expected = "contract reverted")]
+    fn swap_exact_in_reverts_on_precompile_failure() {
+        setup();
+        mock_api::set_call_should_fail(true);
+        let path = make_path(2);
+        // call_precompile calls api::return_value on error, which panics in the mock
+        let _ = swap_exact_in(path, U256::from(100u64), U256::ZERO);
+    }
+
+    // -- Events --
+
+    #[test]
+    fn swap_emits_event() {
+        setup();
+        let path = make_path(2);
+        let _ = swap_exact_in(path, U256::from(100u64), U256::ZERO);
+        assert_eq!(mock_api::event_count(), 1);
+    }
+
+    #[test]
+    fn create_pool_and_add_emits_two_events() {
+        setup();
+        let a1 = vec![1u8; 20];
+        let a2 = vec![2u8; 20];
+        let _ = create_pool_and_add(
+            a1, a2,
+            U256::from(1000u64), U256::from(1000u64),
+            U256::ZERO, U256::ZERO,
+        );
+        // pool_created + liquidity_added
+        assert_eq!(mock_api::event_count(), 2);
+    }
 }
