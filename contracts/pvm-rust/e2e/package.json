@@ -1,0 +1,27 @@
+{
+  "name": "dex-router-e2e",
+  "version": "0.1.0",
+  "description": "End-to-end tests for the Rust PVM DexRouter contract",
+  "private": true,
+  "engines": {
+    "node": ">=22 <23",
+    "npm": ">=10"
+  },
+  "scripts": {
+    "test": "npx hardhat test --network local",
+    "fmt": "prettier --write 'test/**/*.ts' hardhat.config.ts",
+    "fmt:check": "prettier --check 'test/**/*.ts' hardhat.config.ts"
+  },
+  "devDependencies": {
+    "@nomicfoundation/hardhat-network-helpers": "^1.0.0",
+    "@nomicfoundation/hardhat-viem": "^2.0.0",
+    "@types/chai": "^5.2.3",
+    "@types/mocha": "^10.0.10",
+    "chai": "^4.3.0",
+    "hardhat": "^2.27.0",
+    "prettier": "^3.8.1",
+    "ts-node": "^10.9.2",
+    "typescript": "^6.0.2",
+    "viem": "^2.0.0"
+  }
+}

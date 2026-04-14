@@ -3,7 +3,6 @@
 
 [unstable]
  build-std = ["core", "alloc"]
- json-target-spec = true
 
 [env]
  RUSTC_BOOTSTRAP = "1"
