@@ -35,8 +35,10 @@ jobs:
           key: e2e-dex-${{ hashFiles('**/Cargo.lock') }}
           restore-keys: e2e-dex-
 
-      - name: Install rust-src (needed for PVM contract build-std)
-        run: rustup component add rust-src
+      - name: Install nightly toolchain with rust-src (needed for PVM contract build-std)
+        run: |
+          rustup toolchain install nightly --component rust-src
+          rustup component add rust-src
 
       # -- Node.js --
       - uses: actions/setup-node@v4
@@ -50,7 +52,7 @@ jobs:
       # -- Build PVM contract --
       - name: Build DexRouter PVM contract
         working-directory: contracts/pvm-rust
-        run: RUSTC_BOOTSTRAP=1 cargo build --release
+        run: RUSTUP_TOOLCHAIN=nightly cargo build --release
 
       # -- Download SDK binaries --
       - name: Download polkadot-omni-node, eth-rpc, chain-spec-builder
