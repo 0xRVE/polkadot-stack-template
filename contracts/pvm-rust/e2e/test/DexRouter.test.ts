@@ -3,6 +3,7 @@ import hre from "hardhat";
 import * as fs from "fs";
 import * as path from "path";
 import { type Abi, type Hex, getContract, parseAbi } from "viem";
+import { ApiPromise, WsProvider, Keyring } from "@polkadot/api";
 
 // ---------------------------------------------------------------------------
 // ABI — matches IDexRouter in ../DexRouter.sol
@@ -95,6 +96,73 @@ function isPrecompileError(msg: string): boolean {
 		msg.includes("ContractTrapped") ||
 		msg.includes("revert")
 	);
+}
+
+/** Derive the Substrate AccountId32 for an EVM address using
+ *  pallet-revive's AccountId32Mapper: first 20 bytes = H160, last 12 = 0xEE. */
+function evmToSubstrateAccount(evmAddress: Hex): string {
+	const { encodeAddress } = require("@polkadot/util-crypto");
+	const clean = evmAddress.replace("0x", "").toLowerCase();
+	const bytes = Buffer.alloc(32, 0xee);
+	Buffer.from(clean, "hex").copy(bytes, 0);
+	return encodeAddress(bytes, 42);
+}
+
+/** Send a signed extrinsic and wait for inclusion in a block. */
+function sendAndWait(
+	tx: ReturnType<typeof ApiPromise.prototype.tx.assets.create>,
+	signer: ReturnType<Keyring["addFromUri"]>,
+): Promise<void> {
+	return new Promise<void>((resolve, reject) => {
+		tx.signAndSend(signer, ({ status, dispatchError }) => {
+			if (dispatchError) {
+				reject(new Error(dispatchError.toString()));
+			} else if (status.isInBlock) {
+				resolve();
+			}
+		}).catch(reject);
+	});
+}
+
+/** Connect to the Substrate node via WebSocket and create test assets (TSTA=1,
+ *  TSTB=2) with balances minted to Alice's EVM-mapped account.
+ *  Idempotent — skips if assets already exist. */
+async function ensureTestAssets(): Promise<void> {
+	const wsUrl = process.env.WS_URL || "ws://127.0.0.1:9944";
+	const api = await ApiPromise.create({ provider: new WsProvider(wsUrl) });
+	const keyring = new Keyring({ type: "sr25519" });
+	const alice = keyring.addFromUri("//Alice");
+	const mintAmount = 1_000_000_000_000_000n; // 1000 UNIT
+
+	// Alice's EVM address (from private key in hardhat config) maps to a
+	// different Substrate account via AccountId32Mapper.
+	const aliceEvmSubstrate = evmToSubstrateAccount(
+		"0xf24ff3a9cf04c71dbc94d0b566f7a27b94566cac",
+	);
+
+	try {
+		for (const assetId of [1, 2]) {
+			// Create asset if it doesn't exist yet
+			const existing = await api.query.assets.asset(assetId);
+			if (existing.isEmpty) {
+				await sendAndWait(
+					api.tx.assets.create(assetId, alice.address, 1),
+					alice,
+				);
+			}
+
+			// Mint to Alice's EVM-mapped account if balance is zero
+			const balance = await api.query.assets.account(assetId, aliceEvmSubstrate);
+			if (balance.isEmpty) {
+				await sendAndWait(
+					api.tx.assets.mint(assetId, aliceEvmSubstrate, mintAmount),
+					alice,
+				);
+			}
+		}
+	} finally {
+		await api.disconnect();
+	}
 }
 
 // ---------------------------------------------------------------------------
@@ -299,9 +367,9 @@ describe("DexRouter (PVM-Rust)", function () {
 });
 
 // ---------------------------------------------------------------------------
-// Full pool lifecycle — requires test assets to exist on the dev chain.
-// Run against a node started with: ./scripts/start-all.sh
-// which configures TSTA (id=1) and TSTB (id=2) with dev-account balances.
+// Full pool lifecycle — creates test assets via Substrate RPC (pallet-assets),
+// then exercises the full DEX flow through the contract.
+// Requires both a Substrate node (:9944) and eth-rpc proxy (:8545).
 // ---------------------------------------------------------------------------
 
 describe("DexRouter full lifecycle", function () {
@@ -310,7 +378,8 @@ describe("DexRouter full lifecycle", function () {
 	let routerAddress: Hex;
 
 	before(async function () {
-		// Deploy once for the whole suite
+		// Create test assets (TSTA=1, TSTB=2) via Substrate RPC, then deploy
+		await ensureTestAssets();
 		const { router } = await deployDexRouter();
 		routerAddress = router.address;
 	});
@@ -350,8 +419,11 @@ describe("DexRouter full lifecycle", function () {
 			]);
 		} catch (e: unknown) {
 			const msg = (e as Error).message;
+			// The precompile debits from env.caller() which is the contract
+			// address (not Alice). Until the router supports delegate_call or
+			// token transfers, liquidity operations through the router will fail.
 			if (isPrecompileError(msg)) {
-				this.skip(); // no assets on chain, skip remaining lifecycle tests
+				this.skip();
 			}
 			throw e;
 		}
