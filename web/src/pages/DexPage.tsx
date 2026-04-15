@@ -184,9 +184,7 @@ export default function DexPage() {
 				gas: 5_000_000n,
 			});
 			const receipt = await pub_.waitForTransactionReceipt({ hash, timeout: 60_000 });
-			report(
-				`Liquidity removed in block ${receipt.blockNumber} (status: ${receipt.status})`,
-			);
+			report(`Liquidity removed in block ${receipt.blockNumber} (status: ${receipt.status})`);
 		} catch (e: unknown) {
 			report(
 				`Remove liquidity failed: ${e instanceof Error ? e.message.slice(0, 120) : String(e)}`,
