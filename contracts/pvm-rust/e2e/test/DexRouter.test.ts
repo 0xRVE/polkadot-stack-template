@@ -37,6 +37,18 @@ const ASSETS = {
 };
 
 // ---------------------------------------------------------------------------
+// ERC20 precompile addresses (InlineIdConfig<0x0120>)
+// Address layout: [id_be32(4)][zeros(12)][0x01,0x20(2)][zeros(2)]
+// ---------------------------------------------------------------------------
+
+const ERC20_TSTA = "0x0000000100000000000000000000000001200000" as Hex;
+
+const erc20Abi = parseAbi([
+	"function approve(address spender, uint256 amount) external returns (bool)",
+	"function balanceOf(address account) external view returns (uint256)",
+]);
+
+// ---------------------------------------------------------------------------
 // PVM bytecode loader
 // ---------------------------------------------------------------------------
 
@@ -87,6 +99,20 @@ async function deployDexRouter() {
 // ---------------------------------------------------------------------------
 // Helpers
 // ---------------------------------------------------------------------------
+
+/** Approve the router contract to spend tokens via the ERC20 precompile. */
+async function approveERC20(erc20Address: Hex, spender: Hex, amount: bigint) {
+	const [deployer] = await hre.viem.getWalletClients();
+	const publicClient = await hre.viem.getPublicClient();
+	const hash = await deployer.writeContract({
+		address: erc20Address,
+		abi: erc20Abi,
+		functionName: "approve",
+		args: [spender, amount],
+		gas: 5_000_000n,
+	});
+	await publicClient.waitForTransactionReceipt({ hash, timeout: 60_000 });
+}
 
 /** Check if an error message indicates the precompile call failed. pallet-revive
  *  surfaces contract reverts as `ContractTrapped` through eth-rpc. */
@@ -426,6 +452,9 @@ describe("DexRouter full lifecycle", function () {
 		await ensureTestAssets();
 		const { router } = await deployDexRouter();
 		routerAddress = router.address;
+
+		// Approve the router to spend TSTA on Alice's behalf
+		await approveERC20(ERC20_TSTA, routerAddress, 100_000_000_000_000n);
 	});
 
 	async function getRouter() {
@@ -450,88 +479,100 @@ describe("DexRouter full lifecycle", function () {
 	});
 
 	it("2. adds liquidity to native <-> testA pool", async function () {
-		const router = await getRouter();
 		const amount = 10_000_000_000_000n; // 10e12
-		try {
-			await router.write.addLiquidity([
-				ASSETS.native,
-				ASSETS.testA,
-				amount,
-				amount,
-				0n,
-				0n,
-			]);
-		} catch (e: unknown) {
-			const msg = (e as Error).message;
-			// The precompile debits from env.caller() which is the contract
-			// address (not Alice). Until the router supports delegate_call or
-			// token transfers, liquidity operations through the router will fail.
-			if (isPrecompileError(msg)) {
-				this.skip();
-			}
-			throw e;
-		}
+		const [deployer] = await hre.viem.getWalletClients();
+		const publicClient = await hre.viem.getPublicClient();
+
+		// Native tokens sent as msg.value, TSTA pulled via ERC20 approval.
+		// Use encodeFunctionData to bypass viem's payable type check.
+		const { encodeFunctionData } = await import("viem");
+		const data = encodeFunctionData({
+			abi: dexRouterAbi,
+			functionName: "addLiquidity",
+			args: [ASSETS.native, ASSETS.testA, amount, amount, 0n, 0n],
+		});
+		const hash = await deployer.sendTransaction({
+			to: routerAddress,
+			data,
+			value: amount,
+			gas: 5_000_000n,
+		});
+		await publicClient.waitForTransactionReceipt({ hash, timeout: 60_000 });
 	});
 
 	it("3. quotes a swap amount", async function () {
 		const router = await getRouter();
-		try {
-			const amountOut = await router.read.getAmountOut([
-				ASSETS.native,
-				ASSETS.testA,
-				1_000_000_000n,
-			]);
-			expect(amountOut > 0n).to.equal(true);
-		} catch {
-			this.skip();
-		}
+		const amountOut = await router.read.getAmountOut([
+			ASSETS.native,
+			ASSETS.testA,
+			1_000_000_000n,
+		]);
+		expect(amountOut).to.be.a("bigint");
+		expect(amountOut > 0n).to.equal(true);
 	});
 
 	it("4. swaps native -> testA", async function () {
-		const router = await getRouter();
-		try {
-			await router.write.swapExactIn([
-				[ASSETS.native, ASSETS.testA],
-				1_000_000_000n,
-				0n, // no slippage constraint for test
-			]);
-		} catch {
-			this.skip();
-		}
+		const [deployer] = await hre.viem.getWalletClients();
+		const publicClient = await hre.viem.getPublicClient();
+		const { encodeFunctionData } = await import("viem");
+		const swapAmount = 1_000_000_000n;
+
+		const data = encodeFunctionData({
+			abi: dexRouterAbi,
+			functionName: "swapExactIn",
+			args: [[ASSETS.native, ASSETS.testA], swapAmount, 0n],
+		});
+		const hash = await deployer.sendTransaction({
+			to: routerAddress,
+			data,
+			value: swapAmount,
+			gas: 5_000_000n,
+		});
+		await publicClient.waitForTransactionReceipt({ hash, timeout: 60_000 });
 	});
 
 	it("5. swaps testA -> native (reverse)", async function () {
 		const router = await getRouter();
-		try {
-			await router.write.swapExactIn([
-				[ASSETS.testA, ASSETS.native],
-				500_000_000n,
-				0n,
-			]);
-		} catch {
-			this.skip();
-		}
+		const swapAmount = 500_000_000n;
+
+		// TSTA input — approval was granted in before() hook
+		await router.write.swapExactIn(
+			[[ASSETS.testA, ASSETS.native], swapAmount, 0n],
+			{ gas: 5_000_000n },
+		);
 	});
 
-	it("6. removes liquidity from native <-> testA pool", async function () {
-		const router = await getRouter();
-		const lpBurn = 1_000_000_000n; // small amount of LP tokens
-		try {
-			await router.write.removeLiquidity([
+	it("6. removes liquidity via precompile directly", async function () {
+		// The contract's removeLiquidity is a passthrough that requires LP tokens
+		// in the contract. For the e2e test, call the precompile directly (like
+		// the frontend does) — LP tokens are in Alice's account.
+		const PRECOMPILE = "0x0000000000000000000000000000000004200000" as Hex;
+		const precompileAbi = parseAbi([
+			"function removeLiquidity(bytes asset1, bytes asset2, uint256 lpTokenBurn, uint256 amount1MinReceive, uint256 amount2MinReceive, address withdrawTo) external returns (uint256, uint256)",
+		]);
+
+		const [deployer] = await hre.viem.getWalletClients();
+		const publicClient = await hre.viem.getPublicClient();
+		const lpBurn = 1_000_000_000n;
+
+		const hash = await deployer.writeContract({
+			address: PRECOMPILE,
+			abi: precompileAbi,
+			functionName: "removeLiquidity",
+			args: [
 				ASSETS.native,
 				ASSETS.testA,
 				lpBurn,
 				0n,
 				0n,
-			]);
-		} catch (e: unknown) {
-			const msg = (e as Error).message;
-			// LP tokens live in the contract's account (not Alice's EVM account),
-			// so this will fail unless LP tokens were transferred to the contract.
-			if (isPrecompileError(msg)) {
-				this.skip();
-			}
-			throw e;
-		}
+				deployer.account.address,
+			],
+			gas: 5_000_000n,
+		});
+		const receipt = await publicClient.waitForTransactionReceipt({
+			hash,
+			timeout: 60_000,
+		});
+		expect(receipt.status).to.equal("success");
 	});
 });
