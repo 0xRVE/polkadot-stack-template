@@ -162,19 +162,14 @@ async function ensureTestAssets(): Promise<void> {
 
 	// Alice's EVM address (from private key in hardhat config) maps to a
 	// different Substrate account via AccountId32Mapper.
-	const aliceEvmSubstrate = evmToSubstrateAccount(
-		"0xf24ff3a9cf04c71dbc94d0b566f7a27b94566cac",
-	);
+	const aliceEvmSubstrate = evmToSubstrateAccount("0xf24ff3a9cf04c71dbc94d0b566f7a27b94566cac");
 
 	try {
 		for (const assetId of [1, 2]) {
 			// Create asset if it doesn't exist yet
 			const existing = await api.query.assets.asset(assetId);
 			if (existing.isEmpty) {
-				await sendAndWait(
-					api.tx.assets.create(assetId, alice.address, 1),
-					alice,
-				);
+				await sendAndWait(api.tx.assets.create(assetId, alice.address, 1), alice);
 			}
 
 			// Mint to Alice's EVM-mapped account if balance is zero
@@ -329,8 +324,7 @@ describe("DexRouter (PVM-Rust)", function () {
 			} catch (e: unknown) {
 				const msg = (e as Error).message;
 				expect(msg).to.satisfy(
-					(m: string) =>
-						m.includes("PathTooLong") || m.includes("revert"),
+					(m: string) => m.includes("PathTooLong") || m.includes("revert"),
 					"expected PathTooLong or revert error",
 				);
 			}
@@ -345,8 +339,7 @@ describe("DexRouter (PVM-Rust)", function () {
 			} catch (e: unknown) {
 				const msg = (e as Error).message;
 				expect(msg).to.satisfy(
-					(m: string) =>
-						m.includes("PathTooLong") || m.includes("revert"),
+					(m: string) => m.includes("PathTooLong") || m.includes("revert"),
 					"expected PathTooLong or revert error",
 				);
 			}
@@ -393,13 +386,7 @@ describe("DexRouter (PVM-Rust)", function () {
 		it("removeLiquidity reverts with zero LP tokens", async function () {
 			const { router } = await deployDexRouter();
 			try {
-				await router.write.removeLiquidity([
-					ASSETS.native,
-					ASSETS.testA,
-					0n,
-					0n,
-					0n,
-				]);
+				await router.write.removeLiquidity([ASSETS.native, ASSETS.testA, 0n, 0n, 0n]);
 				// If this succeeds, the precompile accepted a 0-burn — unexpected
 				// but not wrong.
 			} catch (e: unknown) {
@@ -427,8 +414,7 @@ describe("DexRouter (PVM-Rust)", function () {
 			} catch (e: unknown) {
 				const msg = (e as Error).message;
 				expect(msg).to.satisfy(
-					(m: string) =>
-						m.includes("UnknownSelector") || m.includes("revert"),
+					(m: string) => m.includes("UnknownSelector") || m.includes("revert"),
 					"expected UnknownSelector or revert error",
 				);
 			}
@@ -507,15 +493,7 @@ describe("DexRouter full lifecycle", function () {
 		const data = encodeFunctionData({
 			abi: precompileAbi,
 			functionName: "addLiquidity",
-			args: [
-				ASSETS.native,
-				ASSETS.testA,
-				amount,
-				amount,
-				0n,
-				0n,
-				deployer.account.address,
-			],
+			args: [ASSETS.native, ASSETS.testA, amount, amount, 0n, 0n, deployer.account.address],
 		});
 		const hash = await deployer.sendTransaction({
 			to: PRECOMPILE,
@@ -599,10 +577,9 @@ describe("DexRouter full lifecycle", function () {
 		const swapAmount = 500_000_000n;
 
 		// TSTA input — approval was granted in before() hook
-		await router.write.swapExactIn(
-			[[ASSETS.testA, ASSETS.native], swapAmount, 0n],
-			{ gas: 5_000_000n },
-		);
+		await router.write.swapExactIn([[ASSETS.testA, ASSETS.native], swapAmount, 0n], {
+			gas: 5_000_000n,
+		});
 	});
 
 	it("6. removes liquidity via precompile directly", async function () {
@@ -622,14 +599,7 @@ describe("DexRouter full lifecycle", function () {
 		const data = encodeFunctionData({
 			abi: precompileAbi,
 			functionName: "removeLiquidity",
-			args: [
-				ASSETS.native,
-				ASSETS.testA,
-				lpBurn,
-				0n,
-				0n,
-				deployer.account.address,
-			],
+			args: [ASSETS.native, ASSETS.testA, lpBurn, 0n, 0n, deployer.account.address],
 		});
 		const hash = await deployer.sendTransaction({
 			to: PRECOMPILE,
