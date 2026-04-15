@@ -63,6 +63,8 @@ pub fn encode_bytes_array(items: &[&[u8]], buf: &mut [u8], offset: usize) {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use alloc::vec;
+    use alloc::vec::Vec;
 
     /// Read the low 4 bytes of an ABI word at byte offset `off`.
     fn read_word(buf: &[u8], off: usize) -> usize {

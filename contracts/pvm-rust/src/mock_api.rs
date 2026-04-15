@@ -3,23 +3,41 @@ use std::sync::Mutex;
 
 struct State {
     caller_addr: [u8; 20],
+    self_addr: [u8; 20],
     call_should_fail: bool,
     call_output: [u8; 128],
     event_count: u32,
+    call_count: u32,
 }
 
 static STATE: Mutex<State> = Mutex::new(State {
     caller_addr: [0xAA; 20],
+    self_addr: [0xBB; 20],
     call_should_fail: false,
     call_output: [0u8; 128],
     event_count: 0,
+    call_count: 0,
 });
 
 pub enum MockApi {}
 
 impl MockApi {
+    // -- Dispatch helpers (used by macro-generated code) --
+
+    pub fn call_data_size() -> u64 {
+        0
+    }
+
+    pub fn call_data_copy(_output: &mut &mut [u8], _offset: u32) {}
+
+    // -- Contract API --
+
     pub fn caller(output: &mut [u8; 20]) {
         output.copy_from_slice(&STATE.lock().unwrap().caller_addr);
+    }
+
+    pub fn address(output: &mut [u8; 20]) {
+        output.copy_from_slice(&STATE.lock().unwrap().self_addr);
     }
 
     pub fn hash_keccak_256(input: &[u8], output: &mut [u8; 32]) {
@@ -43,7 +61,8 @@ impl MockApi {
         _input_data: &[u8],
         output: Option<&mut &mut [u8]>,
     ) -> Result<(), ReturnErrorCode> {
-        let state = STATE.lock().unwrap();
+        let mut state = STATE.lock().unwrap();
+        state.call_count += 1;
         if state.call_should_fail {
             return Err(ReturnErrorCode::CalleeTrapped);
         }
@@ -78,11 +97,17 @@ pub fn set_call_should_fail(fail: bool) {
 pub fn reset() {
     let mut state = STATE.lock().unwrap();
     state.caller_addr = [0xAA; 20];
+    state.self_addr = [0xBB; 20];
     state.call_should_fail = false;
     state.call_output = [0u8; 128];
     state.event_count = 0;
+    state.call_count = 0;
 }
 
 pub fn event_count() -> u32 {
     STATE.lock().unwrap().event_count
+}
+
+pub fn call_count() -> u32 {
+    STATE.lock().unwrap().call_count
 }

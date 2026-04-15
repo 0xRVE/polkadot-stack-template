@@ -9,7 +9,9 @@ use ruint::aliases::U256;
 #[cfg(test)]
 mod mock_api;
 
-#[pvm_contract_macros::contract("DexRouter.sol", allocator = "bump", allocator_size = 4096)]
+/// DexRouter — pulls tokens from the caller via ERC20 approval, then
+/// delegates to the asset-conversion precompile for swaps and liquidity.
+#[cfg_attr(not(test), pvm_contract_macros::contract("DexRouter.sol", allocator = "bump", allocator_size = 8192))]
 mod dex_router {
     use super::*;
     use alloc::vec;
@@ -21,15 +23,24 @@ mod dex_router {
     #[cfg(test)]
     use super::mock_api::MockApi as api;
 
-    // Precompile address for asset-conversion (ADDRESS = 0x0420).
-    const PRECOMPILE_ADDR: [u8; 20] = [
+    // ── Constants ────────────────────────────────────────────────────────
+
+    /// Asset-conversion precompile (ADDRESS = 0x0420).
+    const PRECOMPILE: [u8; 20] = [
         0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0x04, 0x20, 0, 0,
     ];
+
+    /// ERC20 precompile prefix bytes at [16..18] (InlineIdConfig<0x0120>).
+    /// Full address layout: [id_be32(4)][zeros(12)][0x01,0x20(2)][zeros(2)].
+    const ERC20_BYTE16: u8 = 0x01;
+    const ERC20_BYTE17: u8 = 0x20;
+
+    // ── Errors ───────────────────────────────────────────────────────────
 
     #[derive(Debug, Clone, Copy, PartialEq, Eq)]
     pub enum Error {
         PrecompileCallFailed,
-        SlippageExceeded,
+        TransferFromFailed,
         UnknownSelector,
         PathTooLong,
     }
@@ -38,21 +49,23 @@ mod dex_router {
         fn as_ref(&self) -> &[u8] {
             match *self {
                 Error::PrecompileCallFailed => b"PrecompileCallFailed",
-                Error::SlippageExceeded => b"SlippageExceeded",
+                Error::TransferFromFailed => b"TransferFromFailed",
                 Error::UnknownSelector => b"UnknownSelector",
                 Error::PathTooLong => b"PathTooLong",
             }
         }
     }
 
-    #[pvm_contract_macros::constructor]
+    // ── Constructor ──────────────────────────────────────────────────────
+
+    #[cfg_attr(not(test), pvm_contract_macros::constructor)]
     pub fn new() -> Result<(), Error> {
         Ok(())
     }
 
-    // === Contract methods ===
+    // ── Swap ─────────────────────────────────────────────────────────────
 
-    #[pvm_contract_macros::method]
+    #[cfg_attr(not(test), pvm_contract_macros::method)]
     pub fn swap_exact_in(
         path: Vec<Vec<u8>>,
         amount_in: U256,
@@ -61,16 +74,24 @@ mod dex_router {
         if path.len() > MAX_SWAP_PATH {
             return Err(Error::PathTooLong);
         }
-        let caller = get_caller();
-        let path_refs: Vec<&[u8]> = path.iter().map(|p: &Vec<u8>| p.as_slice()).collect();
-        let calldata = build_swap_exact_in(&path_refs, amount_in, amount_out_min, &caller, false);
-        let output = call_precompile(&calldata);
-        let amount_out = decode_u256(&output);
-        emit_swap_executed(&caller, amount_in, amount_out);
+        let caller = caller_addr();
+        let me = self_addr();
+
+        // Pull input token from caller → contract.
+        pull_token(&path[0], &caller, &me, amount_in);
+
+        // Execute swap; output goes directly to caller.
+        let path_refs: Vec<&[u8]> = path.iter().map(|p| p.as_slice()).collect();
+        let out = dex_call(&build_swap_exact_in(
+            &path_refs, amount_in, amount_out_min, &caller, false,
+        ));
+        let amount_out = dec_u256(&out);
+
+        emit_swap(&caller, amount_in, amount_out);
         Ok(amount_out)
     }
 
-    #[pvm_contract_macros::method]
+    #[cfg_attr(not(test), pvm_contract_macros::method)]
     pub fn swap_exact_out(
         path: Vec<Vec<u8>>,
         amount_out: U256,
@@ -79,40 +100,53 @@ mod dex_router {
         if path.len() > MAX_SWAP_PATH {
             return Err(Error::PathTooLong);
         }
-        let caller = get_caller();
-        let path_refs: Vec<&[u8]> = path.iter().map(|p: &Vec<u8>| p.as_slice()).collect();
-        let calldata =
-            build_swap_exact_out(&path_refs, amount_out, amount_in_max, &caller, false);
-        let output = call_precompile(&calldata);
-        let amount_in = decode_u256(&output);
-        emit_swap_executed(&caller, amount_in, amount_out);
+        let caller = caller_addr();
+        let me = self_addr();
+
+        // Pull max input from caller.
+        pull_token(&path[0], &caller, &me, amount_in_max);
+
+        // Execute swap.
+        let path_refs: Vec<&[u8]> = path.iter().map(|p| p.as_slice()).collect();
+        let out = dex_call(&build_swap_exact_out(
+            &path_refs, amount_out, amount_in_max, &caller, false,
+        ));
+        let amount_in = dec_u256(&out);
+
+        // Refund unused input.
+        if amount_in < amount_in_max {
+            push_token(&path[0], &caller, amount_in_max - amount_in);
+        }
+
+        emit_swap(&caller, amount_in, amount_out);
         Ok(amount_in)
     }
 
-    #[pvm_contract_macros::method]
+    // ── Quotes (read-only, no approval needed) ───────────────────────────
+
+    #[cfg_attr(not(test), pvm_contract_macros::method)]
     pub fn get_amount_out(asset_in: Vec<u8>, asset_out: Vec<u8>, amount_in: U256) -> U256 {
-        let calldata = build_quote_exact_in(&asset_in, &asset_out, amount_in, true);
-        let output = call_precompile(&calldata);
-        decode_u256(&output)
+        let out = dex_call(&build_quote_exact_in(&asset_in, &asset_out, amount_in, true));
+        dec_u256(&out)
     }
 
-    #[pvm_contract_macros::method]
+    #[cfg_attr(not(test), pvm_contract_macros::method)]
     pub fn get_amount_in(asset_in: Vec<u8>, asset_out: Vec<u8>, amount_out: U256) -> U256 {
-        let calldata = build_quote_exact_out(&asset_in, &asset_out, amount_out, true);
-        let output = call_precompile(&calldata);
-        decode_u256(&output)
+        let out = dex_call(&build_quote_exact_out(&asset_in, &asset_out, amount_out, true));
+        dec_u256(&out)
     }
 
-    #[pvm_contract_macros::method]
+    // ── Pool management ──────────────────────────────────────────────────
+
+    #[cfg_attr(not(test), pvm_contract_macros::method)]
     pub fn create_pool(asset1: Vec<u8>, asset2: Vec<u8>) -> Result<(), Error> {
-        let caller = get_caller();
-        let calldata = build_create_pool(&asset1, &asset2);
-        call_precompile(&calldata);
+        let caller = caller_addr();
+        dex_call(&build_create_pool(&asset1, &asset2));
         emit_pool_created(&caller);
         Ok(())
     }
 
-    #[pvm_contract_macros::method]
+    #[cfg_attr(not(test), pvm_contract_macros::method)]
     pub fn add_liquidity(
         asset1: Vec<u8>,
         asset2: Vec<u8>,
@@ -121,23 +155,34 @@ mod dex_router {
         amount1_min: U256,
         amount2_min: U256,
     ) -> Result<U256, Error> {
-        let caller = get_caller();
-        let calldata = build_add_liquidity(
-            &asset1,
-            &asset2,
-            amount1_desired,
-            amount2_desired,
-            amount1_min,
-            amount2_min,
+        let caller = caller_addr();
+        let me = self_addr();
+
+        // Pull both tokens from caller.
+        pull_token(&asset1, &caller, &me, amount1_desired);
+        pull_token(&asset2, &caller, &me, amount2_desired);
+
+        // Add liquidity — LP tokens go to caller.
+        let out = dex_call(&build_add_liquidity(
+            &asset1, &asset2,
+            amount1_desired, amount2_desired,
+            amount1_min, amount2_min,
             &caller,
-        );
-        let output = call_precompile(&calldata);
-        let liquidity = decode_u256(&output);
+        ));
+        let lp = dec_u256(&out);
+
+        // Refund any tokens the pool didn't consume.
+        sweep_token(&asset1, &caller, &me);
+        sweep_token(&asset2, &caller, &me);
+
         emit_liquidity_added(&caller, amount1_desired, amount2_desired);
-        Ok(liquidity)
+        Ok(lp)
     }
 
-    #[pvm_contract_macros::method]
+    /// Remove liquidity from a pool. LP tokens must already be in this
+    /// contract (transfer them before calling). The withdrawn assets are
+    /// sent directly to the caller.
+    #[cfg_attr(not(test), pvm_contract_macros::method)]
     pub fn remove_liquidity(
         asset1: Vec<u8>,
         asset2: Vec<u8>,
@@ -145,23 +190,19 @@ mod dex_router {
         amount1_min: U256,
         amount2_min: U256,
     ) -> Result<(U256, U256), Error> {
-        let caller = get_caller();
-        let calldata = build_remove_liquidity(
-            &asset1,
-            &asset2,
-            lp_token_burn,
-            amount1_min,
-            amount2_min,
+        let caller = caller_addr();
+        let out = dex_call(&build_remove_liquidity(
+            &asset1, &asset2,
+            lp_token_burn, amount1_min, amount2_min,
             &caller,
-        );
-        let output = call_precompile(&calldata);
-        let amount1 = decode_u256(&output);
-        let amount2 = decode_u256(&output[32..]);
+        ));
+        let a1 = dec_u256(&out);
+        let a2 = dec_u256(&out[32..]);
         emit_liquidity_removed(&caller, lp_token_burn);
-        Ok((amount1, amount2))
+        Ok((a1, a2))
     }
 
-    #[pvm_contract_macros::method]
+    #[cfg_attr(not(test), pvm_contract_macros::method)]
     pub fn create_pool_and_add(
         asset1: Vec<u8>,
         asset2: Vec<u8>,
@@ -170,77 +211,140 @@ mod dex_router {
         amount1_min: U256,
         amount2_min: U256,
     ) -> Result<U256, Error> {
-        let caller = get_caller();
+        let caller = caller_addr();
+        let me = self_addr();
 
-        let create_data = build_create_pool(&asset1, &asset2);
-        call_precompile(&create_data);
+        pull_token(&asset1, &caller, &me, amount1_desired);
+        pull_token(&asset2, &caller, &me, amount2_desired);
 
-        let add_data = build_add_liquidity(
-            &asset1,
-            &asset2,
-            amount1_desired,
-            amount2_desired,
-            amount1_min,
-            amount2_min,
+        dex_call(&build_create_pool(&asset1, &asset2));
+
+        let out = dex_call(&build_add_liquidity(
+            &asset1, &asset2,
+            amount1_desired, amount2_desired,
+            amount1_min, amount2_min,
             &caller,
-        );
-        let output = call_precompile(&add_data);
-        let liquidity = decode_u256(&output);
+        ));
+        let lp = dec_u256(&out);
+
+        sweep_token(&asset1, &caller, &me);
+        sweep_token(&asset2, &caller, &me);
+
         emit_pool_created(&caller);
         emit_liquidity_added(&caller, amount1_desired, amount2_desired);
-        Ok(liquidity)
+        Ok(lp)
     }
 
-    #[pvm_contract_macros::fallback]
+    #[cfg_attr(not(test), pvm_contract_macros::fallback)]
     pub fn fallback() -> Result<(), Error> {
         Err(Error::UnknownSelector)
     }
 
-    // === Internal: precompile interaction ===
+    // ── Token management (pull / push / sweep) ───────────────────────────
 
-    fn get_caller() -> [u8; 20] {
-        let mut caller = [0u8; 20];
-        api::caller(&mut caller);
-        caller
-    }
-
-    fn selector(sig: &[u8]) -> [u8; 4] {
-        let mut hash = [0u8; 32];
-        api::hash_keccak_256(sig, &mut hash);
-        [hash[0], hash[1], hash[2], hash[3]]
-    }
-
-    fn encode_u256(val: U256) -> [u8; 32] {
-        val.to_be_bytes::<32>()
-    }
-
-    fn encode_address(addr: &[u8; 20]) -> [u8; 32] {
-        let mut word = [0u8; 32];
-        word[12..32].copy_from_slice(addr);
-        word
-    }
-
-    fn encode_bool(val: bool) -> [u8; 32] {
-        let mut word = [0u8; 32];
-        if val {
-            word[31] = 1;
+    /// Pull `amount` of `asset` from `from` to `to` via ERC20 `transferFrom`.
+    /// Native assets (SCALE prefix 0x00) are expected as msg.value — no pull.
+    fn pull_token(asset: &[u8], from: &[u8; 20], to: &[u8; 20], amount: U256) {
+        if let Some(erc20) = erc20_of(asset) {
+            erc20_call(&erc20, &build_transfer_from(from, to, amount));
         }
-        word
     }
 
-    fn decode_u256(data: &[u8]) -> U256 {
-        if data.len() < 32 {
+    /// Transfer `amount` of `asset` from this contract to `to`.
+    fn push_token(asset: &[u8], to: &[u8; 20], amount: U256) {
+        if let Some(erc20) = erc20_of(asset) {
+            erc20_call(&erc20, &build_erc20_transfer(to, amount));
+        }
+    }
+
+    /// Sweep: send any remaining balance of `asset` from `me` back to `to`.
+    fn sweep_token(asset: &[u8], to: &[u8; 20], me: &[u8; 20]) {
+        if let Some(erc20) = erc20_of(asset) {
+            let out = erc20_call(&erc20, &build_balance_of(me));
+            let bal = dec_u256(&out);
+            if bal > U256::ZERO {
+                erc20_call(&erc20, &build_erc20_transfer(to, bal));
+            }
+        }
+    }
+
+    /// Map SCALE-encoded `NativeOrWithId` to its ERC20 precompile H160.
+    /// Returns `None` for the native asset (no ERC20 wrapper).
+    pub fn erc20_of(asset: &[u8]) -> Option<[u8; 20]> {
+        if asset.is_empty() || asset[0] == 0x00 {
+            return None;
+        }
+        if asset[0] == 0x01 && asset.len() >= 5 {
+            let id = u32::from_le_bytes([asset[1], asset[2], asset[3], asset[4]]);
+            let mut addr = [0u8; 20];
+            addr[0..4].copy_from_slice(&id.to_be_bytes());
+            addr[16] = ERC20_BYTE16;
+            addr[17] = ERC20_BYTE17;
+            return Some(addr);
+        }
+        None
+    }
+
+    // ── Low-level helpers ────────────────────────────────────────────────
+
+    fn caller_addr() -> [u8; 20] {
+        let mut out = [0u8; 20];
+        api::caller(&mut out);
+        out
+    }
+
+    fn self_addr() -> [u8; 20] {
+        let mut out = [0u8; 20];
+        api::address(&mut out);
+        out
+    }
+
+    fn sel(sig: &[u8]) -> [u8; 4] {
+        let mut h = [0u8; 32];
+        api::hash_keccak_256(sig, &mut h);
+        [h[0], h[1], h[2], h[3]]
+    }
+
+    fn enc_u256(v: U256) -> [u8; 32] {
+        v.to_be_bytes::<32>()
+    }
+
+    fn enc_addr(a: &[u8; 20]) -> [u8; 32] {
+        let mut w = [0u8; 32];
+        w[12..32].copy_from_slice(a);
+        w
+    }
+
+    fn enc_bool(v: bool) -> [u8; 32] {
+        let mut w = [0u8; 32];
+        if v { w[31] = 1; }
+        w
+    }
+
+    fn dec_u256(d: &[u8]) -> U256 {
+        if d.len() < 32 {
             return U256::ZERO;
         }
-        U256::from_be_bytes::<32>(data[0..32].try_into().unwrap())
+        U256::from_be_bytes::<32>(d[0..32].try_into().unwrap())
     }
 
-    fn call_precompile(calldata: &[u8]) -> [u8; 128] {
+    /// Call the asset-conversion precompile. Reverts with
+    /// `PrecompileCallFailed()` on failure.
+    fn dex_call(calldata: &[u8]) -> [u8; 128] {
+        do_call(&PRECOMPILE, calldata, b"PrecompileCallFailed()")
+    }
+
+    /// Call an ERC20 precompile. Reverts with `TransferFromFailed()` on failure.
+    fn erc20_call(addr: &[u8; 20], calldata: &[u8]) -> [u8; 128] {
+        do_call(addr, calldata, b"TransferFromFailed()")
+    }
+
+    fn do_call(addr: &[u8; 20], calldata: &[u8], err_sig: &[u8]) -> [u8; 128] {
         let mut output = [0u8; 128];
         let mut output_ref = &mut output[..];
         let result = api::call(
             CallFlags::empty(),
-            &PRECOMPILE_ADDR,
+            addr,
             u64::MAX,
             u64::MAX,
             &[u8::MAX; 32],
@@ -249,18 +353,100 @@ mod dex_router {
             Some(&mut output_ref),
         );
         if result.is_err() {
-            let sig = selector(b"PrecompileCallFailed()");
-            api::return_value(ReturnFlags::REVERT, &sig);
+            let s = sel(err_sig);
+            api::return_value(ReturnFlags::REVERT, &s);
         }
         output
     }
 
-    /// Common encoder: selector + 2 bytes params (with offsets) + N static words
-    fn encode_two_bytes(
-        sig: &[u8; 4],
-        a1: &[u8],
-        a2: &[u8],
-        static_words: &[[u8; 32]],
+    // ── ERC20 calldata builders ──────────────────────────────────────────
+
+    fn build_transfer_from(from: &[u8; 20], to: &[u8; 20], amount: U256) -> Vec<u8> {
+        let s = sel(b"transferFrom(address,address,uint256)");
+        let mut buf = vec![0u8; 4 + 3 * 32];
+        buf[0..4].copy_from_slice(&s);
+        buf[4..36].copy_from_slice(&enc_addr(from));
+        buf[36..68].copy_from_slice(&enc_addr(to));
+        buf[68..100].copy_from_slice(&enc_u256(amount));
+        buf
+    }
+
+    fn build_erc20_transfer(to: &[u8; 20], amount: U256) -> Vec<u8> {
+        let s = sel(b"transfer(address,uint256)");
+        let mut buf = vec![0u8; 4 + 2 * 32];
+        buf[0..4].copy_from_slice(&s);
+        buf[4..36].copy_from_slice(&enc_addr(to));
+        buf[36..68].copy_from_slice(&enc_u256(amount));
+        buf
+    }
+
+    fn build_balance_of(account: &[u8; 20]) -> Vec<u8> {
+        let s = sel(b"balanceOf(address)");
+        let mut buf = vec![0u8; 4 + 32];
+        buf[0..4].copy_from_slice(&s);
+        buf[4..36].copy_from_slice(&enc_addr(account));
+        buf
+    }
+
+    // ── Precompile calldata builders ─────────────────────────────────────
+
+    fn build_swap_exact_in(
+        path: &[&[u8]], amount_in: U256, amount_out_min: U256,
+        send_to: &[u8; 20], keep_alive: bool,
+    ) -> Vec<u8> {
+        let s = sel(b"swapExactTokensForTokens(bytes[],uint256,uint256,address,bool)");
+        let path_data_size = bytes_array_encoded_size(path);
+        let total = 4 + 5 * 32 + path_data_size;
+        let mut buf = vec![0u8; total];
+        buf[0..4].copy_from_slice(&s);
+        let mut pos = 4;
+
+        let mut off = [0u8; 32];
+        off[28..32].copy_from_slice(&160u32.to_be_bytes());
+        buf[pos..pos + 32].copy_from_slice(&off);
+        pos += 32;
+        buf[pos..pos + 32].copy_from_slice(&enc_u256(amount_in));
+        pos += 32;
+        buf[pos..pos + 32].copy_from_slice(&enc_u256(amount_out_min));
+        pos += 32;
+        buf[pos..pos + 32].copy_from_slice(&enc_addr(send_to));
+        pos += 32;
+        buf[pos..pos + 32].copy_from_slice(&enc_bool(keep_alive));
+        pos += 32;
+        encode_bytes_array(path, &mut buf, pos);
+        buf
+    }
+
+    fn build_swap_exact_out(
+        path: &[&[u8]], amount_out: U256, amount_in_max: U256,
+        send_to: &[u8; 20], keep_alive: bool,
+    ) -> Vec<u8> {
+        let s = sel(b"swapTokensForExactTokens(bytes[],uint256,uint256,address,bool)");
+        let path_data_size = bytes_array_encoded_size(path);
+        let total = 4 + 5 * 32 + path_data_size;
+        let mut buf = vec![0u8; total];
+        buf[0..4].copy_from_slice(&s);
+        let mut pos = 4;
+
+        let mut off = [0u8; 32];
+        off[28..32].copy_from_slice(&160u32.to_be_bytes());
+        buf[pos..pos + 32].copy_from_slice(&off);
+        pos += 32;
+        buf[pos..pos + 32].copy_from_slice(&enc_u256(amount_out));
+        pos += 32;
+        buf[pos..pos + 32].copy_from_slice(&enc_u256(amount_in_max));
+        pos += 32;
+        buf[pos..pos + 32].copy_from_slice(&enc_addr(send_to));
+        pos += 32;
+        buf[pos..pos + 32].copy_from_slice(&enc_bool(keep_alive));
+        pos += 32;
+        encode_bytes_array(path, &mut buf, pos);
+        buf
+    }
+
+    /// Common encoder: selector + two `bytes` params + N static words.
+    fn enc_two_bytes(
+        sig: &[u8; 4], a1: &[u8], a2: &[u8], static_words: &[[u8; 32]],
     ) -> Vec<u8> {
         let a1_padded = ((a1.len() + 31) / 32) * 32;
         let a2_padded = ((a2.len() + 31) / 32) * 32;
@@ -305,105 +491,51 @@ mod dex_router {
         buf
     }
 
-    // === Precompile calldata builders ===
-
-    fn build_swap_exact_in(
-        path: &[&[u8]], amount_in: U256, amount_out_min: U256, send_to: &[u8; 20], keep_alive: bool,
-    ) -> Vec<u8> {
-        let sig = selector(b"swapExactTokensForTokens(bytes[],uint256,uint256,address,bool)");
-        let path_data_size = bytes_array_encoded_size(path);
-        let total = 4 + 5 * 32 + path_data_size;
-        let mut buf = vec![0u8; total];
-        buf[0..4].copy_from_slice(&sig);
-        let mut pos = 4;
-
-        let mut off = [0u8; 32];
-        off[28..32].copy_from_slice(&160u32.to_be_bytes());
-        buf[pos..pos + 32].copy_from_slice(&off);
-        pos += 32;
-        buf[pos..pos + 32].copy_from_slice(&encode_u256(amount_in));
-        pos += 32;
-        buf[pos..pos + 32].copy_from_slice(&encode_u256(amount_out_min));
-        pos += 32;
-        buf[pos..pos + 32].copy_from_slice(&encode_address(send_to));
-        pos += 32;
-        buf[pos..pos + 32].copy_from_slice(&encode_bool(keep_alive));
-        pos += 32;
-        encode_bytes_array(path, &mut buf, pos);
-        buf
-    }
-
-    fn build_swap_exact_out(
-        path: &[&[u8]], amount_out: U256, amount_in_max: U256, send_to: &[u8; 20], keep_alive: bool,
-    ) -> Vec<u8> {
-        let sig = selector(b"swapTokensForExactTokens(bytes[],uint256,uint256,address,bool)");
-        let path_data_size = bytes_array_encoded_size(path);
-        let total = 4 + 5 * 32 + path_data_size;
-        let mut buf = vec![0u8; total];
-        buf[0..4].copy_from_slice(&sig);
-        let mut pos = 4;
-
-        let mut off = [0u8; 32];
-        off[28..32].copy_from_slice(&160u32.to_be_bytes());
-        buf[pos..pos + 32].copy_from_slice(&off);
-        pos += 32;
-        buf[pos..pos + 32].copy_from_slice(&encode_u256(amount_out));
-        pos += 32;
-        buf[pos..pos + 32].copy_from_slice(&encode_u256(amount_in_max));
-        pos += 32;
-        buf[pos..pos + 32].copy_from_slice(&encode_address(send_to));
-        pos += 32;
-        buf[pos..pos + 32].copy_from_slice(&encode_bool(keep_alive));
-        pos += 32;
-        encode_bytes_array(path, &mut buf, pos);
-        buf
-    }
-
     fn build_quote_exact_in(a_in: &[u8], a_out: &[u8], amount: U256, fee: bool) -> Vec<u8> {
-        let sig = selector(b"quoteExactTokensForTokens(bytes,bytes,uint256,bool)");
-        encode_two_bytes(&sig, a_in, a_out, &[encode_u256(amount), encode_bool(fee)])
+        let s = sel(b"quoteExactTokensForTokens(bytes,bytes,uint256,bool)");
+        enc_two_bytes(&s, a_in, a_out, &[enc_u256(amount), enc_bool(fee)])
     }
 
     fn build_quote_exact_out(a_in: &[u8], a_out: &[u8], amount: U256, fee: bool) -> Vec<u8> {
-        let sig = selector(b"quoteTokensForExactTokens(bytes,bytes,uint256,bool)");
-        encode_two_bytes(&sig, a_in, a_out, &[encode_u256(amount), encode_bool(fee)])
+        let s = sel(b"quoteTokensForExactTokens(bytes,bytes,uint256,bool)");
+        enc_two_bytes(&s, a_in, a_out, &[enc_u256(amount), enc_bool(fee)])
     }
 
     fn build_create_pool(a1: &[u8], a2: &[u8]) -> Vec<u8> {
-        let sig = selector(b"createPool(bytes,bytes)");
-        encode_two_bytes(&sig, a1, a2, &[])
+        let s = sel(b"createPool(bytes,bytes)");
+        enc_two_bytes(&s, a1, a2, &[])
     }
 
     fn build_add_liquidity(
         a1: &[u8], a2: &[u8], d1: U256, d2: U256, m1: U256, m2: U256, mint_to: &[u8; 20],
     ) -> Vec<u8> {
-        let sig = selector(b"addLiquidity(bytes,bytes,uint256,uint256,uint256,uint256,address)");
-        encode_two_bytes(&sig, a1, a2, &[
-            encode_u256(d1), encode_u256(d2), encode_u256(m1), encode_u256(m2),
-            encode_address(mint_to),
+        let s = sel(b"addLiquidity(bytes,bytes,uint256,uint256,uint256,uint256,address)");
+        enc_two_bytes(&s, a1, a2, &[
+            enc_u256(d1), enc_u256(d2), enc_u256(m1), enc_u256(m2),
+            enc_addr(mint_to),
         ])
     }
 
     fn build_remove_liquidity(
         a1: &[u8], a2: &[u8], lp: U256, m1: U256, m2: U256, to: &[u8; 20],
     ) -> Vec<u8> {
-        let sig = selector(b"removeLiquidity(bytes,bytes,uint256,uint256,uint256,address)");
-        encode_two_bytes(&sig, a1, a2, &[
-            encode_u256(lp), encode_u256(m1), encode_u256(m2), encode_address(to),
+        let s = sel(b"removeLiquidity(bytes,bytes,uint256,uint256,uint256,address)");
+        enc_two_bytes(&s, a1, a2, &[
+            enc_u256(lp), enc_u256(m1), enc_u256(m2), enc_addr(to),
         ])
     }
 
-    // === Events ===
+    // ── Events ───────────────────────────────────────────────────────────
 
-    fn emit_swap_executed(sender: &[u8; 20], amount_in: U256, amount_out: U256) {
+    fn emit_swap(sender: &[u8; 20], amount_in: U256, amount_out: U256) {
         let mut sig = [0u8; 32];
         api::hash_keccak_256(b"SwapExecuted(address,uint256,uint256)", &mut sig);
-        let mut sender_topic = [0u8; 32];
-        sender_topic[12..32].copy_from_slice(sender);
+        let mut t = [0u8; 32];
+        t[12..32].copy_from_slice(sender);
         let mut data = [0u8; 64];
-        data[0..32].copy_from_slice(&encode_u256(amount_in));
-        data[32..64].copy_from_slice(&encode_u256(amount_out));
-        api::deposit_event(&[sig, sender_topic], &data);
+        data[0..32].copy_from_slice(&enc_u256(amount_in));
+        data[32..64].copy_from_slice(&enc_u256(amount_out));
+        api::deposit_event(&[sig, t], &data);
     }
 
     fn emit_pool_created(creator: &[u8; 20]) {
@@ -420,8 +552,8 @@ mod dex_router {
         let mut t = [0u8; 32];
         t[12..32].copy_from_slice(provider);
         let mut data = [0u8; 64];
-        data[0..32].copy_from_slice(&encode_u256(a1));
-        data[32..64].copy_from_slice(&encode_u256(a2));
+        data[0..32].copy_from_slice(&enc_u256(a1));
+        data[32..64].copy_from_slice(&enc_u256(a2));
         api::deposit_event(&[sig, t], &data);
     }
 
@@ -430,7 +562,7 @@ mod dex_router {
         api::hash_keccak_256(b"LiquidityRemoved(address,uint256)", &mut sig);
         let mut t = [0u8; 32];
         t[12..32].copy_from_slice(provider);
-        api::deposit_event(&[sig, t], &encode_u256(lp));
+        api::deposit_event(&[sig, t], &enc_u256(lp));
     }
 }
 
@@ -444,87 +576,158 @@ mod tests {
 
     fn setup() {
         mock_api::reset();
-        // Put a recognisable amount_out (1000) in the first 32 bytes of call output.
         let mut out = [0u8; 128];
         out[..32].copy_from_slice(&U256::from(1000u64).to_be_bytes::<32>());
         mock_api::set_call_output(&out);
     }
 
-    fn make_path(n: usize) -> Vec<Vec<u8>> {
-        (0..n).map(|i| vec![i as u8; 20]).collect()
+    /// Path of pallet-assets tokens (WithId SCALE format).
+    fn token_path(n: usize) -> Vec<Vec<u8>> {
+        (0..n).map(|i| vec![0x01, (i + 1) as u8, 0, 0, 0]).collect()
     }
 
-    // -- PathTooLong validation --
+    /// Native → Token path.
+    fn native_path() -> Vec<Vec<u8>> {
+        vec![vec![0x00], vec![0x01, 1, 0, 0, 0]]
+    }
+
+    // -- ERC20 address mapping --
+
+    #[test]
+    fn erc20_of_native_returns_none() {
+        assert_eq!(erc20_of(&[0x00]), None);
+    }
+
+    #[test]
+    fn erc20_of_empty_returns_none() {
+        assert_eq!(erc20_of(&[]), None);
+    }
+
+    #[test]
+    fn erc20_of_asset_id_1() {
+        let addr = erc20_of(&[0x01, 1, 0, 0, 0]).unwrap();
+        assert_eq!(addr[0..4], [0, 0, 0, 1]);
+        assert_eq!(addr[4..16], [0; 12]);
+        assert_eq!(addr[16..18], [0x01, 0x20]);
+        assert_eq!(addr[18..20], [0, 0]);
+    }
+
+    #[test]
+    fn erc20_of_asset_id_2() {
+        let addr = erc20_of(&[0x01, 2, 0, 0, 0]).unwrap();
+        assert_eq!(addr[0..4], [0, 0, 0, 2]);
+        assert_eq!(addr[16..18], [0x01, 0x20]);
+    }
+
+    // -- PathTooLong --
 
     #[test]
     fn swap_exact_in_rejects_long_path() {
         setup();
-        let path = make_path(9);
-        let result = swap_exact_in(path, U256::from(100u64), U256::ZERO);
+        let result = swap_exact_in(token_path(9), U256::from(100u64), U256::ZERO);
         assert_eq!(result, Err(Error::PathTooLong));
     }
 
     #[test]
     fn swap_exact_out_rejects_long_path() {
         setup();
-        let path = make_path(9);
-        let result = swap_exact_out(path, U256::from(100u64), U256::MAX);
+        let result = swap_exact_out(token_path(9), U256::from(100u64), U256::MAX);
         assert_eq!(result, Err(Error::PathTooLong));
     }
 
-    // -- Happy path --
+    // -- Swap happy path --
 
     #[test]
-    fn swap_exact_in_succeeds() {
+    fn swap_exact_in_token_pulls_and_swaps() {
         setup();
-        let path = make_path(2);
-        let result = swap_exact_in(path, U256::from(100u64), U256::ZERO);
+        let result = swap_exact_in(token_path(2), U256::from(100u64), U256::ZERO);
         assert_eq!(result, Ok(U256::from(1000u64)));
+        // 1 ERC20 transferFrom + 1 precompile swap
+        assert_eq!(mock_api::call_count(), 2);
+        assert_eq!(mock_api::event_count(), 1);
     }
 
     #[test]
-    fn swap_exact_out_succeeds() {
+    fn swap_exact_in_native_skips_pull() {
         setup();
-        let path = make_path(2);
-        let result = swap_exact_out(path, U256::from(100u64), U256::MAX);
+        let result = swap_exact_in(native_path(), U256::from(100u64), U256::ZERO);
         assert_eq!(result, Ok(U256::from(1000u64)));
+        // No ERC20 pull for native input, only precompile swap
+        assert_eq!(mock_api::call_count(), 1);
+        assert_eq!(mock_api::event_count(), 1);
+    }
+
+    #[test]
+    fn swap_exact_out_refunds_excess() {
+        setup();
+        // Mock returns amount_in = 1000; amount_in_max = 2000 → refund 1000
+        let result = swap_exact_out(token_path(2), U256::from(500u64), U256::from(2000u64));
+        assert_eq!(result, Ok(U256::from(1000u64)));
+        // 1 pull + 1 swap + 1 refund
+        assert_eq!(mock_api::call_count(), 3);
+    }
+
+    #[test]
+    fn swap_exact_out_no_refund_when_exact() {
+        setup();
+        // Mock returns amount_in = 1000 = amount_in_max → no refund
+        let result = swap_exact_out(token_path(2), U256::from(500u64), U256::from(1000u64));
+        assert_eq!(result, Ok(U256::from(1000u64)));
+        // 1 pull + 1 swap, no refund
+        assert_eq!(mock_api::call_count(), 2);
     }
 
     #[test]
     fn swap_exact_in_at_max_path_length() {
         setup();
-        let path = make_path(8);
-        let result = swap_exact_in(path, U256::from(50u64), U256::ZERO);
+        let result = swap_exact_in(token_path(8), U256::from(50u64), U256::ZERO);
         assert!(result.is_ok());
     }
 
-    // -- Precompile failure --
+    // -- Revert on failure --
 
     #[test]
     #[should_panic(expected = "contract reverted")]
-    fn swap_exact_in_reverts_on_precompile_failure() {
+    fn swap_reverts_on_precompile_failure() {
         setup();
         mock_api::set_call_should_fail(true);
-        let path = make_path(2);
-        // call_precompile calls api::return_value on error, which panics in the mock
-        let _ = swap_exact_in(path, U256::from(100u64), U256::ZERO);
+        // Use native input so first call is the precompile, not ERC20
+        let _ = swap_exact_in(native_path(), U256::from(100u64), U256::ZERO);
     }
 
-    // -- Events --
+    #[test]
+    #[should_panic(expected = "contract reverted")]
+    fn swap_reverts_on_erc20_failure() {
+        setup();
+        mock_api::set_call_should_fail(true);
+        // Token input — ERC20 transferFrom is the first call and will fail
+        let _ = swap_exact_in(token_path(2), U256::from(100u64), U256::ZERO);
+    }
+
+    // -- Liquidity --
 
     #[test]
-    fn swap_emits_event() {
+    fn add_liquidity_pulls_and_sweeps() {
         setup();
-        let path = make_path(2);
-        let _ = swap_exact_in(path, U256::from(100u64), U256::ZERO);
+        let a1 = vec![0x01, 1, 0, 0, 0];
+        let a2 = vec![0x01, 2, 0, 0, 0];
+        let result = add_liquidity(
+            a1, a2,
+            U256::from(1000u64), U256::from(1000u64),
+            U256::ZERO, U256::ZERO,
+        );
+        assert!(result.is_ok());
+        // 2 pulls + 1 addLiquidity + 2*(balanceOf + transfer) = 7 calls
+        // (balanceOf returns mock value 1000 > 0, so transfer fires)
+        assert_eq!(mock_api::call_count(), 7);
         assert_eq!(mock_api::event_count(), 1);
     }
 
     #[test]
     fn create_pool_and_add_emits_two_events() {
         setup();
-        let a1 = vec![1u8; 20];
-        let a2 = vec![2u8; 20];
+        let a1 = vec![0x01, 1, 0, 0, 0];
+        let a2 = vec![0x01, 2, 0, 0, 0];
         let _ = create_pool_and_add(
             a1, a2,
             U256::from(1000u64), U256::from(1000u64),
