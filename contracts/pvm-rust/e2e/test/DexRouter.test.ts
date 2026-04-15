@@ -445,6 +445,7 @@ describe("DexRouter (PVM-Rust)", function () {
 describe("DexRouter full lifecycle", function () {
 	this.timeout(120_000);
 
+	const PRECOMPILE = "0x0000000000000000000000000000000004200000" as Hex;
 	let routerAddress: Hex;
 
 	before(async function () {
@@ -470,7 +471,6 @@ describe("DexRouter full lifecycle", function () {
 	it("1. creates pool native <-> testA", async function () {
 		// Create pool via the precompile directly — the contract's createPool is
 		// tested in the standalone suite. Pool setup is a prerequisite, not the SUT.
-		const PRECOMPILE = "0x0000000000000000000000000000000004200000" as Hex;
 		const precompileAbi = parseAbi([
 			"function createPool(bytes asset1, bytes asset2) external",
 		]);
@@ -482,8 +482,10 @@ describe("DexRouter full lifecycle", function () {
 				functionName: "createPool",
 				args: [ASSETS.native, ASSETS.testA],
 			});
-		} catch {
+		} catch (e: unknown) {
+			const msg = (e as Error).message;
 			// Pool may already exist from a previous run — that's fine.
+			if (!isPrecompileError(msg)) throw e;
 		}
 	});
 
@@ -498,7 +500,6 @@ describe("DexRouter full lifecycle", function () {
 
 		// Add liquidity via the precompile directly. Use encodeFunctionData +
 		// sendTransaction to bypass viem's payable type check (native value needed).
-		const PRECOMPILE = "0x0000000000000000000000000000000004200000" as Hex;
 		const precompileAbi = parseAbi([
 			"function addLiquidity(bytes asset1, bytes asset2, uint256 amount1Desired, uint256 amount2Desired, uint256 amount1Min, uint256 amount2Min, address mintTo) external returns (uint256)",
 		]);
@@ -533,7 +534,6 @@ describe("DexRouter full lifecycle", function () {
 		const publicClient = await hre.viem.getPublicClient();
 
 		// First verify the precompile works directly (bypassing the contract).
-		const PRECOMPILE = "0x0000000000000000000000000000000004200000" as Hex;
 		const precompileAbi = parseAbi([
 			"function quoteExactTokensForTokens(bytes asset1, bytes asset2, uint256 amount, bool includeFee) external view returns (uint256)",
 		]);
@@ -560,6 +560,7 @@ describe("DexRouter full lifecycle", function () {
 			data,
 			gas: 5_000_000n,
 		});
+		expect(result.data, "getAmountOut eth_call returned no data").to.exist;
 		const amountOut = decodeFunctionResult({
 			abi: dexRouterAbi,
 			functionName: "getAmountOut",
@@ -567,6 +568,9 @@ describe("DexRouter full lifecycle", function () {
 		}) as bigint;
 		expect(amountOut).to.be.a("bigint");
 		expect(amountOut > 0n).to.equal(true);
+		// Both are read-only eth_calls against the same block — the contract
+		// should return the exact same quote as the precompile it delegates to.
+		expect(amountOut).to.equal(directQuote);
 	});
 
 	it("4. swaps native -> testA", async function () {
@@ -586,7 +590,8 @@ describe("DexRouter full lifecycle", function () {
 			value: swapAmount,
 			gas: 5_000_000n,
 		});
-		await publicClient.waitForTransactionReceipt({ hash, timeout: 60_000 });
+		const receipt = await publicClient.waitForTransactionReceipt({ hash, timeout: 60_000 });
+		expect(receipt.status).to.equal("success", "swapExactIn tx reverted");
 	});
 
 	it("5. swaps testA -> native (reverse)", async function () {
@@ -605,7 +610,6 @@ describe("DexRouter full lifecycle", function () {
 		// when the previous one is still in the mempool.
 		await new Promise((r) => setTimeout(r, 4000));
 
-		const PRECOMPILE = "0x0000000000000000000000000000000004200000" as Hex;
 		const precompileAbi = parseAbi([
 			"function removeLiquidity(bytes asset1, bytes asset2, uint256 lpTokenBurn, uint256 amount1MinReceive, uint256 amount2MinReceive, address withdrawTo) external returns (uint256, uint256)",
 		]);
