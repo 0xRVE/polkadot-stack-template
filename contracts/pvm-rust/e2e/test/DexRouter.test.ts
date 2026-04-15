@@ -73,25 +73,16 @@ async function deployDexRouter() {
 	const publicClient = await hre.viem.getPublicClient();
 	const bytecode = loadBytecode();
 
-	console.log(`        🚀 deploying DexRouter...`);
-	const hash = await deployer.deployContract({
-		abi: dexRouterAbi,
-		bytecode,
-	});
-	console.log(`        🚀 deploy tx hash: ${hash}`);
-
-	const receipt = await publicClient.waitForTransactionReceipt({
-		hash,
-		timeout: 120_000,
-	});
-	console.log(`        ✅ deployed at ${receipt.contractAddress} (block ${receipt.blockNumber})`);
+	const receipt = await sendWithRetry("deploy", () =>
+		deployer.deployContract({ abi: dexRouterAbi, bytecode }),
+	);
 
 	if (!receipt.contractAddress) {
-		throw new Error(`Deploy tx ${hash} did not create a contract`);
+		throw new Error(`Deploy did not create a contract`);
 	}
 
 	const router = getContract({
-		address: receipt.contractAddress,
+		address: receipt.contractAddress as Hex,
 		abi: dexRouterAbi,
 		client: { public: publicClient, wallet: deployer },
 	});
@@ -103,37 +94,51 @@ async function deployDexRouter() {
 // Helpers
 // ---------------------------------------------------------------------------
 
-/** Approve the router contract to spend tokens via the ERC20 precompile.
- *  Retries up to 3 times — the eth-rpc proxy sometimes accepts a tx hash
- *  but drops the transaction from its mempool before it gets mined. */
-async function approveERC20(erc20Address: Hex, spender: Hex, amount: bigint) {
-	const [deployer] = await hre.viem.getWalletClients();
+/** Send an eth-rpc write transaction with retries. The eth-rpc proxy
+ *  sometimes accepts a tx hash but drops it from its mempool before it
+ *  gets mined. This wrapper retries on timeout/priority errors. */
+async function sendWithRetry(
+	label: string,
+	sendFn: () => Promise<Hex>,
+	opts?: { retries?: number; receiptTimeout?: number },
+): Promise<{ status: string; blockNumber: bigint; [k: string]: unknown }> {
 	const publicClient = await hre.viem.getPublicClient();
+	const maxAttempts = opts?.retries ?? 5;
+	const timeout = opts?.receiptTimeout ?? 8_000;
 
-	for (let attempt = 1; attempt <= 3; attempt++) {
+	for (let attempt = 1; attempt <= maxAttempts; attempt++) {
 		try {
-			console.log(`        📝 approve attempt ${attempt}: sending tx...`);
-			const hash = await deployer.writeContract({
-				address: erc20Address,
-				abi: erc20Abi,
-				functionName: "approve",
-				args: [spender, amount],
-				gas: 5_000_000n,
-			});
-			console.log(`        📝 approve tx hash: ${hash}`);
-			const receipt = await publicClient.waitForTransactionReceipt({ hash, timeout: 30_000 });
-			console.log(`        ✅ approve confirmed in block ${receipt.blockNumber}`);
-			return;
+			console.log(`        📝 ${label} attempt ${attempt}: sending tx...`);
+			const hash = await sendFn();
+			console.log(`        📝 ${label} tx hash: ${hash}`);
+			const receipt = await publicClient.waitForTransactionReceipt({ hash, timeout });
+			console.log(`        ✅ ${label} confirmed in block ${receipt.blockNumber}`);
+			return receipt;
 		} catch (e: unknown) {
 			const msg = (e as Error).message;
-			if (attempt < 3 && (msg.includes("Timed out") || msg.includes("Priority"))) {
-				console.log(`        ⚠️  approve attempt ${attempt} failed: ${msg.slice(0, 100)}`);
+			if (attempt < maxAttempts && (msg.includes("Timed out") || msg.includes("Priority"))) {
+				console.log(`        ⚠️  ${label} attempt ${attempt} failed: ${msg.slice(0, 100)}`);
 				await waitForNextBlock();
 				continue;
 			}
 			throw e;
 		}
 	}
+	throw new Error(`${label} failed after ${maxAttempts} attempts`);
+}
+
+/** Approve the router contract to spend tokens via the ERC20 precompile. */
+async function approveERC20(erc20Address: Hex, spender: Hex, amount: bigint) {
+	const [deployer] = await hre.viem.getWalletClients();
+	await sendWithRetry("approve", () =>
+		deployer.writeContract({
+			address: erc20Address,
+			abi: erc20Abi,
+			functionName: "approve",
+			args: [spender, amount],
+			gas: 5_000_000n,
+		}),
+	);
 }
 
 /** Wait for a new block so all pending txs are included. The eth-rpc proxy
