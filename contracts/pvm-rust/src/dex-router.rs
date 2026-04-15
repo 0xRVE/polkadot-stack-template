@@ -4,6 +4,7 @@
 extern crate alloc;
 
 use dex_router_encoding::{bytes_array_encoded_size, encode_bytes_array, MAX_SWAP_PATH};
+use pvm_contract_types::Bytes;
 use ruint::aliases::U256;
 
 #[cfg(test)]
@@ -58,16 +59,16 @@ mod dex_router {
 
     // ── Constructor ──────────────────────────────────────────────────────
 
-    #[cfg_attr(not(test), pvm_contract_macros::constructor)]
+    #[pvm_contract_macros::constructor]
     pub fn new() -> Result<(), Error> {
         Ok(())
     }
 
     // ── Swap ─────────────────────────────────────────────────────────────
 
-    #[cfg_attr(not(test), pvm_contract_macros::method)]
+    #[pvm_contract_macros::method]
     pub fn swap_exact_in(
-        path: Vec<Vec<u8>>,
+        path: Vec<Bytes>,
         amount_in: U256,
         amount_out_min: U256,
     ) -> Result<U256, Error> {
@@ -78,10 +79,10 @@ mod dex_router {
         let me = self_addr();
 
         // Pull input token from caller → contract.
-        pull_token(&path[0], &caller, &me, amount_in);
+        pull_token(&path[0].0, &caller, &me, amount_in);
 
         // Execute swap; output goes directly to caller.
-        let path_refs: Vec<&[u8]> = path.iter().map(|p| p.as_slice()).collect();
+        let path_refs: Vec<&[u8]> = path.iter().map(|p| p.0.as_slice()).collect();
         let out = dex_call(&build_swap_exact_in(
             &path_refs, amount_in, amount_out_min, &caller, false,
         ));
@@ -91,9 +92,9 @@ mod dex_router {
         Ok(amount_out)
     }
 
-    #[cfg_attr(not(test), pvm_contract_macros::method)]
+    #[pvm_contract_macros::method]
     pub fn swap_exact_out(
-        path: Vec<Vec<u8>>,
+        path: Vec<Bytes>,
         amount_out: U256,
         amount_in_max: U256,
     ) -> Result<U256, Error> {
@@ -104,10 +105,10 @@ mod dex_router {
         let me = self_addr();
 
         // Pull max input from caller.
-        pull_token(&path[0], &caller, &me, amount_in_max);
+        pull_token(&path[0].0, &caller, &me, amount_in_max);
 
         // Execute swap.
-        let path_refs: Vec<&[u8]> = path.iter().map(|p| p.as_slice()).collect();
+        let path_refs: Vec<&[u8]> = path.iter().map(|p| p.0.as_slice()).collect();
         let out = dex_call(&build_swap_exact_out(
             &path_refs, amount_out, amount_in_max, &caller, false,
         ));
@@ -115,7 +116,7 @@ mod dex_router {
 
         // Refund unused input.
         if amount_in < amount_in_max {
-            push_token(&path[0], &caller, amount_in_max - amount_in);
+            push_token(&path[0].0, &caller, amount_in_max - amount_in);
         }
 
         emit_swap(&caller, amount_in, amount_out);
@@ -124,32 +125,32 @@ mod dex_router {
 
     // ── Quotes (read-only, no approval needed) ───────────────────────────
 
-    #[cfg_attr(not(test), pvm_contract_macros::method)]
-    pub fn get_amount_out(asset_in: Vec<u8>, asset_out: Vec<u8>, amount_in: U256) -> U256 {
-        let out = dex_call(&build_quote_exact_in(&asset_in, &asset_out, amount_in, true));
+    #[pvm_contract_macros::method]
+    pub fn get_amount_out(asset_in: Bytes, asset_out: Bytes, amount_in: U256) -> U256 {
+        let out = dex_call(&build_quote_exact_in(&asset_in.0, &asset_out.0, amount_in, true));
         dec_u256(&out)
     }
 
-    #[cfg_attr(not(test), pvm_contract_macros::method)]
-    pub fn get_amount_in(asset_in: Vec<u8>, asset_out: Vec<u8>, amount_out: U256) -> U256 {
-        let out = dex_call(&build_quote_exact_out(&asset_in, &asset_out, amount_out, true));
+    #[pvm_contract_macros::method]
+    pub fn get_amount_in(asset_in: Bytes, asset_out: Bytes, amount_out: U256) -> U256 {
+        let out = dex_call(&build_quote_exact_out(&asset_in.0, &asset_out.0, amount_out, true));
         dec_u256(&out)
     }
 
     // ── Pool management ──────────────────────────────────────────────────
 
-    #[cfg_attr(not(test), pvm_contract_macros::method)]
-    pub fn create_pool(asset1: Vec<u8>, asset2: Vec<u8>) -> Result<(), Error> {
+    #[pvm_contract_macros::method]
+    pub fn create_pool(asset1: Bytes, asset2: Bytes) -> Result<(), Error> {
         let caller = caller_addr();
-        dex_call(&build_create_pool(&asset1, &asset2));
+        dex_call(&build_create_pool(&asset1.0, &asset2.0));
         emit_pool_created(&caller);
         Ok(())
     }
 
-    #[cfg_attr(not(test), pvm_contract_macros::method)]
+    #[pvm_contract_macros::method]
     pub fn add_liquidity(
-        asset1: Vec<u8>,
-        asset2: Vec<u8>,
+        asset1: Bytes,
+        asset2: Bytes,
         amount1_desired: U256,
         amount2_desired: U256,
         amount1_min: U256,
@@ -159,12 +160,12 @@ mod dex_router {
         let me = self_addr();
 
         // Pull both tokens from caller.
-        pull_token(&asset1, &caller, &me, amount1_desired);
-        pull_token(&asset2, &caller, &me, amount2_desired);
+        pull_token(&asset1.0, &caller, &me, amount1_desired);
+        pull_token(&asset2.0, &caller, &me, amount2_desired);
 
         // Add liquidity — LP tokens go to caller.
         let out = dex_call(&build_add_liquidity(
-            &asset1, &asset2,
+            &asset1.0, &asset2.0,
             amount1_desired, amount2_desired,
             amount1_min, amount2_min,
             &caller,
@@ -172,8 +173,8 @@ mod dex_router {
         let lp = dec_u256(&out);
 
         // Refund any tokens the pool didn't consume.
-        sweep_token(&asset1, &caller, &me);
-        sweep_token(&asset2, &caller, &me);
+        sweep_token(&asset1.0, &caller, &me);
+        sweep_token(&asset2.0, &caller, &me);
 
         emit_liquidity_added(&caller, amount1_desired, amount2_desired);
         Ok(lp)
@@ -182,17 +183,17 @@ mod dex_router {
     /// Remove liquidity from a pool. LP tokens must already be in this
     /// contract (transfer them before calling). The withdrawn assets are
     /// sent directly to the caller.
-    #[cfg_attr(not(test), pvm_contract_macros::method)]
+    #[pvm_contract_macros::method]
     pub fn remove_liquidity(
-        asset1: Vec<u8>,
-        asset2: Vec<u8>,
+        asset1: Bytes,
+        asset2: Bytes,
         lp_token_burn: U256,
         amount1_min: U256,
         amount2_min: U256,
     ) -> Result<(U256, U256), Error> {
         let caller = caller_addr();
         let out = dex_call(&build_remove_liquidity(
-            &asset1, &asset2,
+            &asset1.0, &asset2.0,
             lp_token_burn, amount1_min, amount2_min,
             &caller,
         ));
@@ -202,10 +203,10 @@ mod dex_router {
         Ok((a1, a2))
     }
 
-    #[cfg_attr(not(test), pvm_contract_macros::method)]
+    #[pvm_contract_macros::method]
     pub fn create_pool_and_add(
-        asset1: Vec<u8>,
-        asset2: Vec<u8>,
+        asset1: Bytes,
+        asset2: Bytes,
         amount1_desired: U256,
         amount2_desired: U256,
         amount1_min: U256,
@@ -214,28 +215,28 @@ mod dex_router {
         let caller = caller_addr();
         let me = self_addr();
 
-        pull_token(&asset1, &caller, &me, amount1_desired);
-        pull_token(&asset2, &caller, &me, amount2_desired);
+        pull_token(&asset1.0, &caller, &me, amount1_desired);
+        pull_token(&asset2.0, &caller, &me, amount2_desired);
 
-        dex_call(&build_create_pool(&asset1, &asset2));
+        dex_call(&build_create_pool(&asset1.0, &asset2.0));
 
         let out = dex_call(&build_add_liquidity(
-            &asset1, &asset2,
+            &asset1.0, &asset2.0,
             amount1_desired, amount2_desired,
             amount1_min, amount2_min,
             &caller,
         ));
         let lp = dec_u256(&out);
 
-        sweep_token(&asset1, &caller, &me);
-        sweep_token(&asset2, &caller, &me);
+        sweep_token(&asset1.0, &caller, &me);
+        sweep_token(&asset2.0, &caller, &me);
 
         emit_pool_created(&caller);
         emit_liquidity_added(&caller, amount1_desired, amount2_desired);
         Ok(lp)
     }
 
-    #[cfg_attr(not(test), pvm_contract_macros::fallback)]
+    #[pvm_contract_macros::fallback]
     pub fn fallback() -> Result<(), Error> {
         Err(Error::UnknownSelector)
     }
@@ -570,6 +571,7 @@ mod dex_router {
 mod tests {
     use super::dex_router::*;
     use super::mock_api;
+    use super::Bytes;
     use alloc::vec;
     use alloc::vec::Vec;
     use ruint::aliases::U256;
@@ -581,14 +583,16 @@ mod tests {
         mock_api::set_call_output(&out);
     }
 
+    fn b(v: Vec<u8>) -> Bytes { Bytes(v) }
+
     /// Path of pallet-assets tokens (WithId SCALE format).
-    fn token_path(n: usize) -> Vec<Vec<u8>> {
-        (0..n).map(|i| vec![0x01, (i + 1) as u8, 0, 0, 0]).collect()
+    fn token_path(n: usize) -> Vec<Bytes> {
+        (0..n).map(|i| b(vec![0x01, (i + 1) as u8, 0, 0, 0])).collect()
     }
 
     /// Native → Token path.
-    fn native_path() -> Vec<Vec<u8>> {
-        vec![vec![0x00], vec![0x01, 1, 0, 0, 0]]
+    fn native_path() -> Vec<Bytes> {
+        vec![b(vec![0x00]), b(vec![0x01, 1, 0, 0, 0])]
     }
 
     // -- ERC20 address mapping --
@@ -709,8 +713,8 @@ mod tests {
     #[test]
     fn add_liquidity_pulls_and_sweeps() {
         setup();
-        let a1 = vec![0x01, 1, 0, 0, 0];
-        let a2 = vec![0x01, 2, 0, 0, 0];
+        let a1 = b(vec![0x01, 1, 0, 0, 0]);
+        let a2 = b(vec![0x01, 2, 0, 0, 0]);
         let result = add_liquidity(
             a1, a2,
             U256::from(1000u64), U256::from(1000u64),
@@ -726,8 +730,8 @@ mod tests {
     #[test]
     fn create_pool_and_add_emits_two_events() {
         setup();
-        let a1 = vec![0x01, 1, 0, 0, 0];
-        let a2 = vec![0x01, 2, 0, 0, 0];
+        let a1 = b(vec![0x01, 1, 0, 0, 0]);
+        let a2 = b(vec![0x01, 2, 0, 0, 0]);
         let _ = create_pool_and_add(
             a1, a2,
             U256::from(1000u64), U256::from(1000u64),
@@ -742,8 +746,8 @@ mod tests {
     #[test]
     fn remove_liquidity_calls_precompile() {
         setup();
-        let a1 = vec![0x01, 1, 0, 0, 0];
-        let a2 = vec![0x01, 2, 0, 0, 0];
+        let a1 = b(vec![0x01, 1, 0, 0, 0]);
+        let a2 = b(vec![0x01, 2, 0, 0, 0]);
         let result = remove_liquidity(
             a1, a2,
             U256::from(500u64),
@@ -761,8 +765,8 @@ mod tests {
     fn remove_liquidity_reverts_on_failure() {
         setup();
         mock_api::set_call_should_fail(true);
-        let a1 = vec![0x01, 1, 0, 0, 0];
-        let a2 = vec![0x01, 2, 0, 0, 0];
+        let a1 = b(vec![0x01, 1, 0, 0, 0]);
+        let a2 = b(vec![0x01, 2, 0, 0, 0]);
         let _ = remove_liquidity(
             a1, a2,
             U256::from(500u64),
@@ -779,8 +783,8 @@ mod tests {
         out[32..64].copy_from_slice(&U256::from(3000u64).to_be_bytes::<32>());
         mock_api::set_call_output(&out);
 
-        let a1 = vec![0x01, 1, 0, 0, 0];
-        let a2 = vec![0x01, 2, 0, 0, 0];
+        let a1 = b(vec![0x01, 1, 0, 0, 0]);
+        let a2 = b(vec![0x01, 2, 0, 0, 0]);
         let result = remove_liquidity(
             a1, a2,
             U256::from(1000u64),
