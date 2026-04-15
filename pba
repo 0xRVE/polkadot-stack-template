@@ -1,0 +1,44 @@
+Secret phrase:       wedding claw arrive teach six virus walk repeat left language ask danger
+  Network ID:        substrate
+  Secret seed:       0xbd8c9d3ef469244f1bb9a7ca53aa4dc575821f1d075afb90fa4be3cf6d8023c1
+  Public key (hex):  0x2affd722ffd10ea06f578e22208411b021ef33ca00c6bdd87e7fbd32f2b9380d
+  Account ID:        0x2affd722ffd10ea06f578e22208411b021ef33ca00c6bdd87e7fbd32f2b9380d
+  Public key (SS58): 5D35sLr2rzormwSNY437giqiPRYPmUcjfQq5w4SxAWCmQ7Nw
+  SS58 Address:      5D35sLr2rzormwSNY437giqiPRYPmUcjfQq5w4SxAWCmQ7Nw
+
+
+
+# writing dex using pallet-asset-conversion
+
+## 14-04-2026
+- wrote rust contract as backend
+- had to backport pallet-asset-conversion-precompiles from master
+- created front end
+- start-all script and it seems to work
+- swap did not work, appears to run out of gas.
+- hardcoding 5 million gas limit and swap also works. likely wrong gas estimation in eth-rpc?
+- added hardhat end-to-end test (needs node and eth-rpc running)
+- some tests were not working because ALICE acount was not funded.
+- tried to fund ALICE using polkadot/api
+- no luck: found out my design does not work because delegatecall into precompile is not allowed (security vuln I fixed myself a few days ago). This is something claude will not easily see on its own.
+- dex contract needs to pull tokens from the user
+- user need to give approval/allowance to the e contract.
+- for this I had to backport pallet-assets-precompile from master
+
+## 15-04-2026
+- changed dex-router contract to transfer tokens from user before sending it to the dex
+- issue with quote swap in e2e test? Some issue with vec<u8> vs pvm_contract_types::Bytes? Not sure yet need to verify the fix.
+```
+Fix: DexRouter contract ContractTrapped on quote calls
+
+The getAmountOut function trapped when called via eth_call. Root cause: the PVM contract macro (pvm_contract_macros) uses the Rust parameter type to select the ABI decoder. Vec<u8> maps to Solidity uint8[] (each element padded to 32 bytes), but the Solidity interface declares bytes (length-prefixed packed encoding). When a 5-byte SCALE-encoded asset identifier arrived, the decoder tried to read 5 elements at 32-byte intervals from a single 32-byte word, causing an out-of-bounds memory access that trapped the PVM.
+
+Solution: Changed all bytes parameters from Vec<u8> to pvm_contract_types::Bytes, and bytes[] parameters from Vec<Vec<u8>> to Vec<Bytes>. The Bytes type implements SolDecode with the correct packed-bytes decoder matching Solidity's bytes ABI encoding.
+
+Additionally discovered that #[cfg_attr(not(test), pvm_contract_macros::method)] does not work inside a proc-macro-attributed module — cfg_attr on inner items is not expanded before the outer attribute macro receives the token stream. Removed the cfg_attr wrappers since the standalone method/constructor/fallback macros are identity transforms (they pass the function through unchanged when not consumed by the contract module macro).
+```
+
+- Seems like my contract cannot use native (DOT) token in the pool because there is no ERC20 address for DOT.
+
+- problem as with eth-rpc being crappy on stable2512. After upgrading to stable2603 the tests were running reliably.
+- need to run eth-rpc like this to avoid storing state `./bin/eth-rpc --node-rpc-url ws://127.0.0.1:9944 --rpc-cors all --eth-pruning 1`
