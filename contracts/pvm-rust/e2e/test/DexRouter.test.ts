@@ -114,6 +114,19 @@ async function approveERC20(erc20Address: Hex, spender: Hex, amount: bigint) {
 	await publicClient.waitForTransactionReceipt({ hash, timeout: 60_000 });
 }
 
+/** Wait for a new block to be produced. This ensures all previously submitted
+ *  transactions have been included — more reliable than fixed-duration sleeps
+ *  because the eth-rpc proxy rejects same-priority txs from the mempool. */
+async function waitForNextBlock() {
+	const publicClient = await hre.viem.getPublicClient();
+	const current = await publicClient.getBlockNumber();
+	for (let i = 0; i < 30; i++) {
+		await new Promise((r) => setTimeout(r, 1000));
+		if ((await publicClient.getBlockNumber()) > current) return;
+	}
+	throw new Error("Timed out waiting for next block");
+}
+
 /** Check if an error message indicates the precompile call failed. pallet-revive
  *  surfaces contract reverts as `ContractTrapped` through eth-rpc. */
 function isPrecompileError(msg: string): boolean {
@@ -194,16 +207,28 @@ describe("DexRouter (PVM-Rust)", function () {
 	// e2e tests need more time for on-chain transactions
 	this.timeout(120_000);
 
+	// Deploy once — the contract is stateless (no storage), so all tests can
+	// share a single instance. This avoids 14 deploy txs that congest the
+	// eth-rpc mempool and cause flaky nonce conflicts.
+	let router: Awaited<ReturnType<typeof deployDexRouter>>["router"];
+	let deployer: Awaited<ReturnType<typeof deployDexRouter>>["deployer"];
+	let routerAddress: Hex;
+
+	before(async function () {
+		const deployed = await deployDexRouter();
+		router = deployed.router;
+		deployer = deployed.deployer;
+		routerAddress = router.address;
+	});
+
 	describe("Deployment", function () {
-		it("deploys successfully and returns a contract address", async function () {
-			const { router } = await deployDexRouter();
-			expect(router.address).to.match(/^0x[0-9a-fA-F]{40}$/);
+		it("deploys successfully and returns a contract address", function () {
+			expect(routerAddress).to.match(/^0x[0-9a-fA-F]{40}$/);
 		});
 	});
 
 	describe("Pool lifecycle", function () {
 		it("creates a pool via createPool", async function () {
-			const { router } = await deployDexRouter();
 			// Creating a pool for native <-> testA should succeed if the
 			// asset-conversion pallet is configured on the dev chain.
 			try {
@@ -219,7 +244,6 @@ describe("DexRouter (PVM-Rust)", function () {
 		});
 
 		it("creates a pool and adds liquidity in one call", async function () {
-			const { router } = await deployDexRouter();
 			const amount = 1_000_000_000_000n; // 1e12
 
 			try {
@@ -241,7 +265,6 @@ describe("DexRouter (PVM-Rust)", function () {
 
 	describe("Quotes", function () {
 		it("getAmountOut queries the precompile", async function () {
-			const { router } = await deployDexRouter();
 			try {
 				const amountOut = await router.read.getAmountOut([
 					ASSETS.native,
@@ -262,7 +285,6 @@ describe("DexRouter (PVM-Rust)", function () {
 		});
 
 		it("getAmountIn queries the precompile", async function () {
-			const { router } = await deployDexRouter();
 			try {
 				const amountIn = await router.read.getAmountIn([
 					ASSETS.native,
@@ -283,7 +305,6 @@ describe("DexRouter (PVM-Rust)", function () {
 
 	describe("Swaps", function () {
 		it("swapExactIn forwards to the precompile", async function () {
-			const { router } = await deployDexRouter();
 			const path = [ASSETS.native, ASSETS.testA];
 			try {
 				await router.write.swapExactIn([path, 1_000_000_000n, 0n]);
@@ -299,7 +320,6 @@ describe("DexRouter (PVM-Rust)", function () {
 		});
 
 		it("swapExactOut forwards to the precompile", async function () {
-			const { router } = await deployDexRouter();
 			const path = [ASSETS.native, ASSETS.testA];
 			try {
 				await router.write.swapExactOut([path, 1_000_000n, 10_000_000_000_000n]);
@@ -315,7 +335,6 @@ describe("DexRouter (PVM-Rust)", function () {
 
 	describe("Input validation", function () {
 		it("rejects a swap path exceeding MAX_SWAP_PATH (8)", async function () {
-			const { router } = await deployDexRouter();
 			// 9 elements — exceeds the contract's MAX_SWAP_PATH = 8
 			const longPath = Array.from({ length: 9 }, () => ASSETS.native);
 			try {
@@ -331,7 +350,6 @@ describe("DexRouter (PVM-Rust)", function () {
 		});
 
 		it("rejects swapExactOut with a path exceeding MAX_SWAP_PATH", async function () {
-			const { router } = await deployDexRouter();
 			const longPath = Array.from({ length: 9 }, () => ASSETS.native);
 			try {
 				await router.write.swapExactOut([longPath, 1_000n, 10_000_000_000_000n]);
@@ -346,7 +364,6 @@ describe("DexRouter (PVM-Rust)", function () {
 		});
 
 		it("accepts a swap path of exactly 8 elements", async function () {
-			const { router } = await deployDexRouter();
 			// 8 elements — at the limit, should pass validation but may fail
 			// at the precompile if no matching pools exist.
 			const maxPath = Array.from({ length: 8 }, () => ASSETS.native);
@@ -363,7 +380,6 @@ describe("DexRouter (PVM-Rust)", function () {
 
 	describe("Remove liquidity", function () {
 		it("removeLiquidity forwards to the precompile", async function () {
-			const { router } = await deployDexRouter();
 			try {
 				await router.write.removeLiquidity([
 					ASSETS.native,
@@ -384,7 +400,6 @@ describe("DexRouter (PVM-Rust)", function () {
 		});
 
 		it("removeLiquidity reverts with zero LP tokens", async function () {
-			const { router } = await deployDexRouter();
 			try {
 				await router.write.removeLiquidity([ASSETS.native, ASSETS.testA, 0n, 0n, 0n]);
 				// If this succeeds, the precompile accepted a 0-burn — unexpected
@@ -401,9 +416,6 @@ describe("DexRouter (PVM-Rust)", function () {
 
 	describe("Fallback", function () {
 		it("reverts on unknown selector", async function () {
-			const { deployer, publicClient } = await deployDexRouter();
-			const routerAddress = (await deployDexRouter()).router.address;
-
 			try {
 				// Send a call with a bogus 4-byte selector
 				await deployer.sendTransaction({
@@ -439,6 +451,11 @@ describe("DexRouter full lifecycle", function () {
 		await ensureTestAssets();
 		const { router } = await deployDexRouter();
 		routerAddress = router.address;
+
+		// Wait for the deploy tx to fully settle in the eth-rpc pool before
+		// sending the approve — the proxy rejects same-priority txs and the
+		// standalone tests above already submitted 13+ deploys.
+		await waitForNextBlock();
 
 		// Approve the router to spend TSTA on Alice's behalf
 		await approveERC20(ERC20_TSTA, routerAddress, 100_000_000_000_000n);
@@ -476,9 +493,7 @@ describe("DexRouter full lifecycle", function () {
 	});
 
 	it("2. adds liquidity to native <-> testA pool", async function () {
-		// TODO: fix in a better way — eth-rpc rejects same-priority txs when
-		// the previous one is still in the mempool.
-		await new Promise((r) => setTimeout(r, 4000));
+		await waitForNextBlock();
 
 		const amount = 10_000_000_000_000n; // 10e12
 		const [deployer] = await hre.viem.getWalletClients();
@@ -506,8 +521,7 @@ describe("DexRouter full lifecycle", function () {
 	});
 
 	it("3. quotes a swap amount", async function () {
-		// TODO: fix this in a better way — same mempool timing issue as test 6.
-		await new Promise((r) => setTimeout(r, 4000));
+		await waitForNextBlock();
 
 		const publicClient = await hre.viem.getPublicClient();
 
@@ -552,6 +566,8 @@ describe("DexRouter full lifecycle", function () {
 	});
 
 	it("4. swaps native -> testA", async function () {
+		await waitForNextBlock();
+
 		const [deployer] = await hre.viem.getWalletClients();
 		const publicClient = await hre.viem.getPublicClient();
 		const { encodeFunctionData } = await import("viem");
@@ -573,6 +589,8 @@ describe("DexRouter full lifecycle", function () {
 	});
 
 	it("5. swaps testA -> native (reverse)", async function () {
+		await waitForNextBlock();
+
 		const router = await getRouter();
 		const swapAmount = 500_000_000n;
 
@@ -583,9 +601,7 @@ describe("DexRouter full lifecycle", function () {
 	});
 
 	it("6. removes liquidity via precompile directly", async function () {
-		// TODO: fix this in a better way — eth-rpc rejects same-priority txs
-		// when the previous one is still in the mempool.
-		await new Promise((r) => setTimeout(r, 4000));
+		await waitForNextBlock();
 
 		const precompileAbi = parseAbi([
 			"function removeLiquidity(bytes asset1, bytes asset2, uint256 lpTokenBurn, uint256 amount1MinReceive, uint256 amount2MinReceive, address withdrawTo) external returns (uint256, uint256)",
