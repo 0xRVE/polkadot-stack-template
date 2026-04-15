@@ -47,6 +47,9 @@ export default function DexPage() {
 	const [poolAmount1, setPoolAmount1] = useState("1000000000000");
 	const [poolAmount2, setPoolAmount2] = useState("1000000000000");
 
+	// Remove liquidity state
+	const [removeLpAmount, setRemoveLpAmount] = useState("1000000000000");
+
 	const report = (msg: string, err = false) => {
 		setStatus(msg);
 		setIsError(err);
@@ -153,6 +156,40 @@ export default function DexPage() {
 		} catch (e: unknown) {
 			report(
 				`Add liquidity failed: ${e instanceof Error ? e.message.slice(0, 120) : String(e)}`,
+				true,
+			);
+		}
+	};
+
+	const removeLiquidity = async () => {
+		if (!connected) return report("Not connected", true);
+		setLoading(true);
+		try {
+			const wallet = await getWalletClient(accountIdx, ethRpcUrl);
+			const pub_ = getPublicClient(ethRpcUrl);
+			const account = evmDevAccounts[accountIdx].account;
+
+			const hash = await wallet.writeContract({
+				address: ASSET_CONVERSION_PRECOMPILE_ADDRESS,
+				abi: assetConversionAbi,
+				functionName: "removeLiquidity",
+				args: [
+					ASSETS[poolAsset1].encoded,
+					ASSETS[poolAsset2].encoded,
+					BigInt(removeLpAmount),
+					0n,
+					0n,
+					account.address,
+				],
+				gas: 5_000_000n,
+			});
+			const receipt = await pub_.waitForTransactionReceipt({ hash, timeout: 60_000 });
+			report(
+				`Liquidity removed in block ${receipt.blockNumber} (status: ${receipt.status})`,
+			);
+		} catch (e: unknown) {
+			report(
+				`Remove liquidity failed: ${e instanceof Error ? e.message.slice(0, 120) : String(e)}`,
 				true,
 			);
 		}
@@ -319,6 +356,26 @@ export default function DexPage() {
 					</button>
 					<button className="btn-primary" onClick={addLiquidity} disabled={loading}>
 						{loading ? "Adding..." : "Add Liquidity"}
+					</button>
+				</div>
+
+				<hr className="border-white/[0.06] my-4" />
+
+				<h3 className="text-sm font-semibold font-display mb-3">Remove Liquidity</h3>
+				<div>
+					<label className="block text-xs font-medium text-text-secondary mb-1">
+						LP Tokens to Burn
+					</label>
+					<input
+						type="text"
+						className="w-full rounded-lg border border-white/[0.08] bg-white/[0.04] px-3 py-2 text-sm font-mono"
+						value={removeLpAmount}
+						onChange={(e) => setRemoveLpAmount(e.target.value)}
+					/>
+				</div>
+				<div className="mt-3">
+					<button className="btn-primary" onClick={removeLiquidity} disabled={loading}>
+						{loading ? "Removing..." : "Remove Liquidity"}
 					</button>
 				</div>
 			</div>

@@ -736,4 +736,56 @@ mod tests {
         // pool_created + liquidity_added
         assert_eq!(mock_api::event_count(), 2);
     }
+
+    // -- Remove liquidity --
+
+    #[test]
+    fn remove_liquidity_calls_precompile() {
+        setup();
+        let a1 = vec![0x01, 1, 0, 0, 0];
+        let a2 = vec![0x01, 2, 0, 0, 0];
+        let result = remove_liquidity(
+            a1, a2,
+            U256::from(500u64),
+            U256::ZERO, U256::ZERO,
+        );
+        // Default mock has 1000 in first word, 0 in second
+        assert_eq!(result, Ok((U256::from(1000u64), U256::ZERO)));
+        // Only 1 precompile call (passthrough, no pull)
+        assert_eq!(mock_api::call_count(), 1);
+        assert_eq!(mock_api::event_count(), 1);
+    }
+
+    #[test]
+    #[should_panic(expected = "contract reverted")]
+    fn remove_liquidity_reverts_on_failure() {
+        setup();
+        mock_api::set_call_should_fail(true);
+        let a1 = vec![0x01, 1, 0, 0, 0];
+        let a2 = vec![0x01, 2, 0, 0, 0];
+        let _ = remove_liquidity(
+            a1, a2,
+            U256::from(500u64),
+            U256::ZERO, U256::ZERO,
+        );
+    }
+
+    #[test]
+    fn remove_liquidity_returns_both_amounts() {
+        setup();
+        // Set mock output: amount1=2000 in first 32 bytes, amount2=3000 in next 32
+        let mut out = [0u8; 128];
+        out[..32].copy_from_slice(&U256::from(2000u64).to_be_bytes::<32>());
+        out[32..64].copy_from_slice(&U256::from(3000u64).to_be_bytes::<32>());
+        mock_api::set_call_output(&out);
+
+        let a1 = vec![0x01, 1, 0, 0, 0];
+        let a2 = vec![0x01, 2, 0, 0, 0];
+        let result = remove_liquidity(
+            a1, a2,
+            U256::from(1000u64),
+            U256::ZERO, U256::ZERO,
+        );
+        assert_eq!(result, Ok((U256::from(2000u64), U256::from(3000u64))));
+    }
 }

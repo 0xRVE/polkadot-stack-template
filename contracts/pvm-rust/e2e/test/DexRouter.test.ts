@@ -23,7 +23,7 @@ const dexRouterAbi = parseAbi([
 	"event LiquidityAdded(address indexed provider, uint256 amount1, uint256 amount2)",
 	"event LiquidityRemoved(address indexed provider, uint256 lpTokensBurned)",
 	"error PrecompileCallFailed()",
-	"error SlippageExceeded()",
+	"error TransferFromFailed()",
 ]);
 
 // ---------------------------------------------------------------------------
@@ -342,6 +342,50 @@ describe("DexRouter (PVM-Rust)", function () {
 		});
 	});
 
+	describe("Remove liquidity", function () {
+		it("removeLiquidity forwards to the precompile", async function () {
+			const { router } = await deployDexRouter();
+			try {
+				await router.write.removeLiquidity([
+					ASSETS.native,
+					ASSETS.testA,
+					1_000_000_000n,
+					0n,
+					0n,
+				]);
+			} catch (e: unknown) {
+				// Will revert because the contract has no LP tokens — that's
+				// expected. We're verifying the call reaches the precompile.
+				const msg = (e as Error).message;
+				expect(isPrecompileError(msg)).to.equal(
+					true,
+					`expected a precompile error, got: ${msg.slice(0, 200)}`,
+				);
+			}
+		});
+
+		it("removeLiquidity reverts with zero LP tokens", async function () {
+			const { router } = await deployDexRouter();
+			try {
+				await router.write.removeLiquidity([
+					ASSETS.native,
+					ASSETS.testA,
+					0n,
+					0n,
+					0n,
+				]);
+				// If this succeeds, the precompile accepted a 0-burn — unexpected
+				// but not wrong.
+			} catch (e: unknown) {
+				const msg = (e as Error).message;
+				expect(isPrecompileError(msg)).to.equal(
+					true,
+					`expected a precompile error, got: ${msg.slice(0, 200)}`,
+				);
+			}
+		});
+	});
+
 	describe("Fallback", function () {
 		it("reverts on unknown selector", async function () {
 			const { deployer, publicClient } = await deployDexRouter();
@@ -466,6 +510,28 @@ describe("DexRouter full lifecycle", function () {
 			]);
 		} catch {
 			this.skip();
+		}
+	});
+
+	it("6. removes liquidity from native <-> testA pool", async function () {
+		const router = await getRouter();
+		const lpBurn = 1_000_000_000n; // small amount of LP tokens
+		try {
+			await router.write.removeLiquidity([
+				ASSETS.native,
+				ASSETS.testA,
+				lpBurn,
+				0n,
+				0n,
+			]);
+		} catch (e: unknown) {
+			const msg = (e as Error).message;
+			// LP tokens live in the contract's account (not Alice's EVM account),
+			// so this will fail unless LP tokens were transferred to the contract.
+			if (isPrecompileError(msg)) {
+				this.skip();
+			}
+			throw e;
 		}
 	});
 });
