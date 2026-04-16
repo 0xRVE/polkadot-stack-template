@@ -1,7 +1,8 @@
-import { useState } from "react";
+import { useState, useEffect, useCallback } from "react";
 import { useChainStore } from "../store/chainStore";
 import { assetConversionAbi, ASSET_CONVERSION_PRECOMPILE_ADDRESS, ASSETS } from "../config/dex";
 import { getPublicClient, getWalletClient, evmDevAccounts } from "../config/evm";
+import { parseAbi, type Hex } from "viem";
 
 type AssetKey = keyof typeof ASSETS;
 
@@ -10,6 +11,24 @@ const assetOptions: { key: AssetKey; label: string }[] = [
 	{ key: "testA", label: ASSETS.testA.label },
 	{ key: "testB", label: ASSETS.testB.label },
 ];
+
+// ERC20 precompile addresses for pallet-assets tokens (InlineIdConfig<0x0120>)
+const ERC20_ADDRESSES: Partial<Record<AssetKey, Hex>> = {
+	testA: "0x0000000100000000000000000000000001200000",
+	testB: "0x0000000200000000000000000000000001200000",
+};
+
+const erc20BalanceAbi = parseAbi([
+	"function balanceOf(address account) external view returns (uint256)",
+]);
+
+type TxRecord = {
+	action: string;
+	blockNumber: bigint;
+	txHash: string;
+	status: string;
+	timestamp: number;
+};
 
 function StatusMessage({ message, isError }: { message: string; isError?: boolean }) {
 	if (!message) return null;
@@ -26,6 +45,39 @@ function StatusMessage({ message, isError }: { message: string; isError?: boolea
 	);
 }
 
+function TxHistory({ records }: { records: TxRecord[] }) {
+	if (records.length === 0) return null;
+	return (
+		<div className="card mt-6">
+			<h2 className="text-lg font-semibold font-display mb-3">Transaction History</h2>
+			<div className="space-y-2">
+				{records.map((r, i) => (
+					<div
+						key={i}
+						className={`rounded-lg border px-4 py-3 text-xs font-mono ${
+							r.status === "success"
+								? "border-green-500/20 bg-green-500/[0.06] text-green-300"
+								: "border-red-500/20 bg-red-500/[0.06] text-red-300"
+						}`}
+					>
+						<div className="flex justify-between items-center mb-1">
+							<span className="font-semibold font-sans text-sm">{r.action}</span>
+							<span className="text-text-secondary">
+								{r.status === "success" ? "confirmed" : "reverted"}
+							</span>
+						</div>
+						<div className="text-text-secondary">
+							Block: <span className="text-text-primary">{r.blockNumber.toString()}</span>
+							{" | "}
+							Tx: <span className="text-text-primary">{r.txHash}</span>
+						</div>
+					</div>
+				))}
+			</div>
+		</div>
+	);
+}
+
 export default function DexPage() {
 	const ethRpcUrl = useChainStore((s) => s.ethRpcUrl);
 	const connected = useChainStore((s) => s.connected);
@@ -34,6 +86,14 @@ export default function DexPage() {
 	const [status, setStatus] = useState("");
 	const [isError, setIsError] = useState(false);
 	const [loading, setLoading] = useState(false);
+	const [txHistory, setTxHistory] = useState<TxRecord[]>([]);
+
+	// Balances
+	const [balances, setBalances] = useState<Record<AssetKey, string>>({
+		native: "-",
+		testA: "-",
+		testB: "-",
+	});
 
 	// Swap state
 	const [swapFrom, setSwapFrom] = useState<AssetKey>("native");
@@ -50,11 +110,59 @@ export default function DexPage() {
 	// Remove liquidity state
 	const [removeLpAmount, setRemoveLpAmount] = useState("1000000000000");
 
+	const account = evmDevAccounts[accountIdx].account;
+
 	const report = (msg: string, err = false) => {
 		setStatus(msg);
 		setIsError(err);
 		setLoading(false);
 	};
+
+	const addTx = (action: string, blockNumber: bigint, txHash: string, status: string) => {
+		setTxHistory((prev) => [{ action, blockNumber, txHash, status, timestamp: Date.now() }, ...prev]);
+	};
+
+	const fetchBalances = useCallback(async () => {
+		if (!connected) return;
+		try {
+			const pub_ = getPublicClient(ethRpcUrl);
+			const addr = account.address;
+
+			// Native balance
+			const native = await pub_.getBalance({ address: addr });
+			const newBalances: Record<AssetKey, string> = {
+				native: native.toString(),
+				testA: "-",
+				testB: "-",
+			};
+
+			// ERC20 balances
+			for (const key of ["testA", "testB"] as const) {
+				const erc20 = ERC20_ADDRESSES[key];
+				if (!erc20) continue;
+				try {
+					const bal = await pub_.readContract({
+						address: erc20,
+						abi: erc20BalanceAbi,
+						functionName: "balanceOf",
+						args: [addr],
+					});
+					newBalances[key] = bal.toString();
+				} catch {
+					newBalances[key] = "0";
+				}
+			}
+			setBalances(newBalances);
+		} catch {
+			// silently ignore balance fetch errors
+		}
+	}, [connected, ethRpcUrl, account.address]);
+
+	useEffect(() => {
+		fetchBalances();
+		const interval = setInterval(fetchBalances, 6000);
+		return () => clearInterval(interval);
+	}, [fetchBalances]);
 
 	const getQuote = async () => {
 		if (!connected) return report("Not connected", true);
@@ -85,7 +193,6 @@ export default function DexPage() {
 		try {
 			const wallet = await getWalletClient(accountIdx, ethRpcUrl);
 			const pub_ = getPublicClient(ethRpcUrl);
-			const account = evmDevAccounts[accountIdx].account;
 			const path = [ASSETS[swapFrom].encoded, ASSETS[swapTo].encoded];
 
 			const hash = await wallet.writeContract({
@@ -93,11 +200,12 @@ export default function DexPage() {
 				abi: assetConversionAbi,
 				functionName: "swapExactTokensForTokens",
 				args: [path, BigInt(swapAmount), 0n, account.address, false],
-				// TODO: Seems the eth-rpc screws up the estimation, so we hardcode a high gas limit here. Need to fix this in the right place.
 				gas: 5_000_000n,
 			});
 			const receipt = await pub_.waitForTransactionReceipt({ hash, timeout: 60_000 });
+			addTx("Swap", receipt.blockNumber, hash, receipt.status);
 			report(`Swap confirmed in block ${receipt.blockNumber}`);
+			fetchBalances();
 		} catch (e: unknown) {
 			report(
 				`Swap failed: ${e instanceof Error ? e.message.slice(0, 120) : String(e)}`,
@@ -120,6 +228,7 @@ export default function DexPage() {
 				args: [ASSETS[poolAsset1].encoded, ASSETS[poolAsset2].encoded],
 			});
 			const receipt = await pub_.waitForTransactionReceipt({ hash, timeout: 60_000 });
+			addTx("Create Pool", receipt.blockNumber, hash, receipt.status);
 			report(`Pool created in block ${receipt.blockNumber}`);
 		} catch (e: unknown) {
 			report(
@@ -135,7 +244,6 @@ export default function DexPage() {
 		try {
 			const wallet = await getWalletClient(accountIdx, ethRpcUrl);
 			const pub_ = getPublicClient(ethRpcUrl);
-			const account = evmDevAccounts[accountIdx].account;
 
 			const hash = await wallet.writeContract({
 				address: ASSET_CONVERSION_PRECOMPILE_ADDRESS,
@@ -152,7 +260,9 @@ export default function DexPage() {
 				],
 			});
 			const receipt = await pub_.waitForTransactionReceipt({ hash, timeout: 60_000 });
+			addTx("Add Liquidity", receipt.blockNumber, hash, receipt.status);
 			report(`Liquidity added in block ${receipt.blockNumber}`);
+			fetchBalances();
 		} catch (e: unknown) {
 			report(
 				`Add liquidity failed: ${e instanceof Error ? e.message.slice(0, 120) : String(e)}`,
@@ -167,7 +277,6 @@ export default function DexPage() {
 		try {
 			const wallet = await getWalletClient(accountIdx, ethRpcUrl);
 			const pub_ = getPublicClient(ethRpcUrl);
-			const account = evmDevAccounts[accountIdx].account;
 
 			const hash = await wallet.writeContract({
 				address: ASSET_CONVERSION_PRECOMPILE_ADDRESS,
@@ -184,7 +293,9 @@ export default function DexPage() {
 				gas: 5_000_000n,
 			});
 			const receipt = await pub_.waitForTransactionReceipt({ hash, timeout: 60_000 });
-			report(`Liquidity removed in block ${receipt.blockNumber} (status: ${receipt.status})`);
+			addTx("Remove Liquidity", receipt.blockNumber, hash, receipt.status);
+			report(`Liquidity removed in block ${receipt.blockNumber}`);
+			fetchBalances();
 		} catch (e: unknown) {
 			report(
 				`Remove liquidity failed: ${e instanceof Error ? e.message.slice(0, 120) : String(e)}`,
@@ -206,7 +317,7 @@ export default function DexPage() {
 				</p>
 			</div>
 
-			{/* Account selector */}
+			{/* Account selector + balances */}
 			<div className="card">
 				<label className="block text-xs font-medium text-text-secondary mb-1.5">
 					Dev Account
@@ -218,10 +329,25 @@ export default function DexPage() {
 				>
 					{evmDevAccounts.map((acc, i) => (
 						<option key={i} value={i}>
-							{acc.name} ({acc.account.address.slice(0, 10)}...)
+							{acc.name}
 						</option>
 					))}
 				</select>
+				<div className="mt-2 px-1 text-xs font-mono text-text-secondary break-all">
+					{account.address}
+				</div>
+
+				<div className="mt-3 grid grid-cols-3 gap-2">
+					{assetOptions.map((a) => (
+						<div
+							key={a.key}
+							className="rounded-lg border border-white/[0.08] bg-white/[0.04] px-3 py-2"
+						>
+							<div className="text-xs text-text-secondary">{a.label}</div>
+							<div className="text-sm font-mono mt-0.5 truncate">{balances[a.key]}</div>
+						</div>
+					))}
+				</div>
 			</div>
 
 			{/* Swap section */}
@@ -379,6 +505,8 @@ export default function DexPage() {
 			</div>
 
 			<StatusMessage message={status} isError={isError} />
+
+			<TxHistory records={txHistory} />
 		</div>
 	);
 }
