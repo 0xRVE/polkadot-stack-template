@@ -32,10 +32,11 @@ use xcm::latest::prelude::BodyId;
 use super::{
 	weights::{BlockExecutionWeight, ExtrinsicBaseWeight, RocksDbWeight},
 	AccountId, Assets, Aura, Balance, Balances, Block, BlockNumber, CollatorSelection,
-	ConsensusHook, Hash, MessageQueue, Nonce, PalletInfo, ParachainSystem, Runtime, RuntimeCall,
-	RuntimeEvent, RuntimeFreezeReason, RuntimeHoldReason, RuntimeOrigin, RuntimeTask, Session,
-	SessionKeys, System, Timestamp, XcmpQueue, AVERAGE_ON_INITIALIZE_RATIO, EXISTENTIAL_DEPOSIT,
-	HOURS, MAXIMUM_BLOCK_WEIGHT, MICRO_UNIT, NORMAL_DISPATCH_RATIO, SLOT_DURATION, VERSION,
+	ConsensusHook, Hash, MessageQueue, Nonce, PalletInfo, ParachainSystem, PoolAssets, Runtime,
+	RuntimeCall, RuntimeEvent, RuntimeFreezeReason, RuntimeHoldReason, RuntimeOrigin, RuntimeTask,
+	Session, SessionKeys, System, Timestamp, XcmpQueue, AVERAGE_ON_INITIALIZE_RATIO,
+	EXISTENTIAL_DEPOSIT, HOURS, MAXIMUM_BLOCK_WEIGHT, MICRO_UNIT, NORMAL_DISPATCH_RATIO,
+	SLOT_DURATION, VERSION,
 };
 use xcm_config::{RelayLocation, XcmOriginToTransactDispatchOrigin};
 
@@ -324,6 +325,43 @@ impl pallet_assets::Config for Runtime {
 	type BenchmarkHelper = ();
 }
 
+// ── pallet-assets-precompiles permit (EIP-2612 gasless approvals) ─────
+
+impl pallet_assets_precompiles::PermitConfig for Runtime {
+	type ChainId = ConstU64<420_420_421>;
+	type WeightInfo = ();
+}
+
+// ── pallet-assets Instance2 (LP tokens for DEX pools) ────────────────
+//
+// Separate instance so LP token IDs never collide with user-created assets.
+// Only pallet-asset-conversion mints/burns these.
+
+impl pallet_assets::Config<pallet_assets::Instance2> for Runtime {
+	type RuntimeEvent = RuntimeEvent;
+	type Balance = Balance;
+	type AssetId = u32;
+	type AssetIdParameter = codec::Compact<u32>;
+	type Currency = Balances;
+	type CreateOrigin = frame_support::traits::AsEnsureOriginWithArg<EnsureSigned<AccountId>>;
+	type ForceOrigin = EnsureRoot<AccountId>;
+	type AssetDeposit = ConstU128<0>;
+	type AssetAccountDeposit = ConstU128<{ EXISTENTIAL_DEPOSIT }>;
+	type MetadataDepositBase = ConstU128<0>;
+	type MetadataDepositPerByte = ConstU128<0>;
+	type ApprovalDeposit = ConstU128<{ EXISTENTIAL_DEPOSIT }>;
+	type StringLimit = ConstU32<50>;
+	type Freezer = ();
+	type Extra = ();
+	type CallbackHandle = ();
+	type WeightInfo = pallet_assets::weights::SubstrateWeight<Runtime>;
+	type RemoveItemsLimit = ConstU32<1000>;
+	type ReserveData = ();
+	type Holder = ();
+	#[cfg(feature = "runtime-benchmarks")]
+	type BenchmarkHelper = ();
+}
+
 // ── pallet-asset-conversion (DEX) ─────────────────────────────────────
 
 /// Asset type: either the native token or a pallet-assets ID.
@@ -373,7 +411,7 @@ impl pallet_asset_conversion::Config for Runtime {
 	type PoolId = (NativeOrWithId, NativeOrWithId);
 	type PoolLocator = PoolLocator;
 	type PoolAssetId = u32;
-	type PoolAssets = Assets;
+	type PoolAssets = PoolAssets;
 	type PoolSetupFee = PoolSetupFee;
 	type PoolSetupFeeAsset = NativeAssetId;
 	type PoolSetupFeeTarget = ();
@@ -411,6 +449,11 @@ impl pallet_revive::Config for Runtime {
 	type Precompiles = (
 		pallet_asset_conversion_precompiles::AssetConversion<0x0420, Self>,
 		pallet_assets_precompiles::ERC20<Self, pallet_assets_precompiles::InlineIdConfig<0x0120>>,
+		pallet_assets_precompiles::ERC20<
+			Self,
+			pallet_assets_precompiles::InlineIdConfig<0x0220>,
+			pallet_assets::Instance2,
+		>,
 	);
 	type AddressMapper = pallet_revive::AccountId32Mapper<Self>;
 	type RuntimeMemory = ConstU32<{ 128 * 1024 * 1024 }>;

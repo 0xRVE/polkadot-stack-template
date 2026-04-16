@@ -45,3 +45,21 @@ Additionally discovered that #[cfg_attr(not(test), pvm_contract_macros::method)]
 
 ## 16-04-2026
 - small fix to CI
+
+### Native Token Swap Limitation
+
+PVM contracts interact with the runtime through `api::call` (precompiles/contracts) and `api::transfer` (send native tokens). There is no `pallet-balances` precompile, so a contract cannot make its native balance visible to pallets that use `Currency::transfer`.
+
+`pallet-revive` tracks contract balances in its own ledger, while `pallet-asset-conversion` reads from `pallet-balances`. When the DEX precompile tries to debit native tokens from a contract, it sees zero — even though the contract was funded via `msg.value`. ERC20 tokens (`pallet-assets`) are unaffected.
+
+**Workarounds:**
+1. Route native-input swaps directly to the precompile from the frontend (EOA balances are visible to `pallet-balances`)
+2. Deploy a "Wrapped DOT" pallet that mints a `pallet-assets` token 1:1 for deposited native tokens
+3. Upstream fix in `pallet-revive` or `pallet-asset-conversion`
+
+Option 1 is used in this project.
+
+- create pool mints a new token but it start with token_id 0. For the first pool this works but for the second pool it collides with TSTA (id=1). workaround: start AssetsConfig::next_asset_id at higher offset. Solution: another instance of pallet-assets.
+- added pallet-assets instance for PoolAssets
+- added multihop swap
+- empty pool is treated as non-existent pool by asset-conversion (bad UX imho): https://github.com/paritytech/polkadot-sdk/pull/11798
