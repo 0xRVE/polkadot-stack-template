@@ -11,6 +11,10 @@ build = "build.rs"
 name = "dex-router"
 path = "src/dex-router.rs"
 
+[[bin]]
+name = "covered-call"
+path = "src/covered-call.rs"
+
 [lib]
 name = "dex_router_encoding"
 path = "src/encoding.rs"
