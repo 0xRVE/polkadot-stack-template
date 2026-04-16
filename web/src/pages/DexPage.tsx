@@ -32,6 +32,25 @@ function lpTokenAddress(id: number): Hex {
 // Check IDs 0-9 to cover pools created on a fresh chain.
 const LP_TOKEN_IDS = [0, 1, 2, 3, 4, 5, 6, 7, 8, 9];
 
+const ETH_RATIO = 1_000_000n;
+
+/** For native token amounts (inflated by NativeToEthRatio=1e6 in eth-rpc),
+ *  show what the raw value means on-chain. Returns null for non-native assets. */
+function nativeHint(amount: string, asset: AssetKey): string | null {
+	if (asset !== "native") return null;
+	try {
+		const big = BigInt(amount);
+		if (big === 0n) return null;
+		const onChain = big / ETH_RATIO;
+		const dust = big % ETH_RATIO;
+		return dust > 0n
+			? `${onChain} on-chain units (+${dust} sub-unit dust)`
+			: `${onChain} on-chain units`;
+	} catch {
+		return null;
+	}
+}
+
 type TxRecord = {
 	action: string;
 	blockNumber: bigint;
@@ -484,22 +503,17 @@ export default function DexPage() {
 						const raw = balances[a.key];
 						if (a.key === "native" && raw !== "-") {
 							const big = BigInt(raw);
-							const units = big / 1_000_000n;
-							const dust = big % 1_000_000n;
+							const onChain = big / ETH_RATIO;
 							return (
 								<div
 									key={a.key}
 									className="rounded-lg border border-white/[0.08] bg-white/[0.04] px-3 py-2"
 								>
 									<div className="text-xs text-text-secondary">{a.label}</div>
-									<div className="text-sm font-mono mt-0.5 truncate">
-										{units.toString()}
+									<div className="text-sm font-mono mt-0.5 truncate">{raw}</div>
+									<div className="text-[10px] font-mono text-text-secondary truncate">
+										{onChain.toString()} on-chain units
 									</div>
-									{dust > 0n && (
-										<div className="text-[10px] font-mono text-text-secondary truncate">
-											+{dust.toString()} dust
-										</div>
-									)}
 								</div>
 							);
 						}
@@ -567,10 +581,18 @@ export default function DexPage() {
 						value={swapAmount}
 						onChange={(e) => setSwapAmount(e.target.value)}
 					/>
+					{nativeHint(swapAmount, swapFrom) && (
+						<div className="mt-1 text-[10px] font-mono text-text-secondary">
+							{nativeHint(swapAmount, swapFrom)}
+						</div>
+					)}
 				</div>
 				{quoteResult && (
 					<div className="mt-2 text-sm text-text-secondary font-mono">
 						Expected output: {quoteResult}
+						{nativeHint(quoteResult, swapTo) && (
+							<span className="text-[10px] ml-2">{nativeHint(quoteResult, swapTo)}</span>
+						)}
 					</div>
 				)}
 				<div className="mt-4 flex gap-3">
@@ -650,6 +672,11 @@ export default function DexPage() {
 							value={poolAmount1}
 							onChange={(e) => setPoolAmount1(e.target.value)}
 						/>
+						{nativeHint(poolAmount1, poolAsset1) && (
+							<div className="mt-1 text-[10px] font-mono text-text-secondary">
+								{nativeHint(poolAmount1, poolAsset1)}
+							</div>
+						)}
 					</div>
 					<div>
 						<label className="block text-xs font-medium text-text-secondary mb-1">
@@ -661,6 +688,11 @@ export default function DexPage() {
 							value={poolAmount2}
 							onChange={(e) => setPoolAmount2(e.target.value)}
 						/>
+						{nativeHint(poolAmount2, poolAsset2) && (
+							<div className="mt-1 text-[10px] font-mono text-text-secondary">
+								{nativeHint(poolAmount2, poolAsset2)}
+							</div>
+						)}
 					</div>
 				</div>
 				<div className="mt-4 flex gap-3">
