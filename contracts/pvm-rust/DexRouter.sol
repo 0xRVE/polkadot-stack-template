@@ -1,9 +1,10 @@
 // SPDX-License-Identifier: MIT
 pragma solidity ^0.8.28;
 
-/// @title IDexRouter - Router contract wrapping the asset-conversion precompile.
-/// @notice Provides simplified swap, quote, and pool management for the on-chain DEX.
-/// Assets are identified by their SCALE-encoded AssetKind passed as `bytes`.
+/// @title IDexRouter — Router wrapping the asset-conversion precompile.
+/// @notice Assets are identified by their SCALE-encoded AssetKind (`bytes`).
+/// For pallet-assets tokens the caller must first `approve` this contract via
+/// the ERC20 precompile at 0x0120.  For the native token, send msg.value.
 interface IDexRouter {
     // --- Events ---
 
@@ -31,20 +32,19 @@ interface IDexRouter {
     // --- Errors ---
 
     error PrecompileCallFailed();
-    error SlippageExceeded();
+    error TransferFromFailed();
 
     // --- Swap ---
 
-    /// @notice Swap an exact amount of input tokens for output tokens.
-    /// Sends output to the caller.
+    /// @notice Swap exact input tokens for output.
+    /// Pulls input from caller (ERC20 approval required for pallet-assets).
     function swapExactIn(
         bytes[] calldata path,
         uint256 amountIn,
         uint256 amountOutMin
     ) external returns (uint256 amountOut);
 
-    /// @notice Swap tokens to receive an exact output amount.
-    /// Sends output to the caller.
+    /// @notice Swap tokens for exact output. Pulls amountInMax, refunds excess.
     function swapExactOut(
         bytes[] calldata path,
         uint256 amountOut,
@@ -75,7 +75,7 @@ interface IDexRouter {
         bytes calldata asset2
     ) external;
 
-    /// @notice Add liquidity to an existing pool.
+    /// @notice Add liquidity. Pulls both tokens, refunds any excess.
     function addLiquidity(
         bytes calldata asset1,
         bytes calldata asset2,
@@ -85,7 +85,7 @@ interface IDexRouter {
         uint256 amount2Min
     ) external returns (uint256 liquidity);
 
-    /// @notice Remove liquidity from a pool.
+    /// @notice Remove liquidity. LP tokens must be in the contract already.
     function removeLiquidity(
         bytes calldata asset1,
         bytes calldata asset2,

@@ -8,13 +8,14 @@ on:
       - ".github/workflows/ci-e2e-dex.yml"
   workflow_dispatch:
 
+
 concurrency:
   group: ci-e2e-dex-${{ github.ref }}
   cancel-in-progress: true
 
 env:
   CARGO_TERM_COLOR: always
-  STACK_SDK_RELEASE_TAG: polkadot-stable2512-3
+  STACK_SDK_RELEASE_TAG: polkadot-stable2603
 
 jobs:
   e2e:

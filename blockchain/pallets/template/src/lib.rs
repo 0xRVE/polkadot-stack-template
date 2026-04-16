@@ -44,7 +44,7 @@ pub mod pallet {
 	}
 
 	/// A proof-of-existence claim: who created it and when.
-	#[derive(Encode, Decode, Clone, PartialEq, Eq, RuntimeDebug, TypeInfo, MaxEncodedLen)]
+	#[derive(Encode, Decode, Clone, PartialEq, Eq, Debug, TypeInfo, MaxEncodedLen)]
 	#[scale_info(skip_type_params(T))]
 	pub struct Claim<T: Config> {
 		/// The account that created the claim.

@@ -32,17 +32,17 @@ serde_json = { version = "1.0.132", default-features = false }
 smallvec = { version = "1.13.1", default-features = false }
 
 # Polkadot SDK
-polkadot-sdk = { version = "2512.3.3", default-features = false }
-cumulus-pallet-parachain-system = { version = "0.25.0", default-features = false }
-substrate-wasm-builder = { version = "31.1.0" }
+polkadot-sdk = { version = "2603.0.0", default-features = false }
+cumulus-pallet-parachain-system = { version = "0.26.0", default-features = false }
+substrate-wasm-builder = { version = "32.0.0" }
 
 # FRAME (experimental umbrella crate - used by pallets)
-frame = { version = "0.14.0", default-features = false, package = "polkadot-sdk-frame" }
+frame = { version = "0.15.0", default-features = false, package = "polkadot-sdk-frame" }
 
 # Used by pallet dev-deps
-sp-core = { version = "39.0.0" }
-sp-io = { version = "44.0.0", default-features = false }
-sp-statement-store = { version = "24.0.0" }
+sp-core = { version = "40.0.0" }
+sp-io = { version = "45.0.0", default-features = false }
+sp-statement-store = { version = "25.0.0" }
 
 # CLI dependencies
 subxt = { version = "0.38" }
@@ -50,10 +50,10 @@ subxt-signer = { version = "0.38", features = ["sr25519", "subxt"] }
 tokio = { version = "1", features = ["full"] }
 alloy = { version = "1.8", features = ["contract", "provider-http", "signer-local"] }
 
-# Patch pallet-revive-proc-macro to 0.7.1 from polkadot-sdk stable2512-3.
+# Patch pallet-revive-proc-macro to polkadot-sdk stable2603.
 # Version 0.7.2 on crates.io has a compilation bug with #[stable] host function attributes.
 [patch.crates-io]
-pallet-revive-proc-macro = { git = "https://github.com/paritytech/polkadot-sdk", tag = "polkadot-stable2512-3" }
+pallet-revive-proc-macro = { git = "https://github.com/paritytech/polkadot-sdk", tag = "polkadot-stable2603" }
 
 [profile.release]
 opt-level = 3

@@ -3,7 +3,7 @@
 # No official parity/eth-rpc Docker image exists yet.
 
 FROM --platform=linux/amd64 debian:bookworm-slim
-ARG ETH_RPC_VERSION=polkadot-stable2512-3
+ARG ETH_RPC_VERSION=polkadot-stable2603
 RUN apt-get update \
     && apt-get install -y --no-install-recommends curl ca-certificates \
     && curl -sL "https://github.com/paritytech/polkadot-sdk/releases/download/${ETH_RPC_VERSION}/eth-rpc" \

@@ -141,6 +141,7 @@ checksum = "1e748733b7cbc798e1434b6ac524f0c1ff2ab456fe201501e6497c8417a4fc33"
 [[package]]
 name = "cargo-pvm-contract-builder"
 version = "0.3.0"
+source = "git+https://github.com/paritytech/cargo-pvm-contract?rev=586425ca#586425cae76f10af61a84070bf657296194ab4c0"
 dependencies = [
  "anyhow",
  "log",
@@ -671,10 +672,12 @@ dependencies = [
 [[package]]
 name = "pvm-bump-allocator"
 version = "0.3.0"
+source = "git+https://github.com/paritytech/cargo-pvm-contract?rev=586425ca#586425cae76f10af61a84070bf657296194ab4c0"
 
 [[package]]
 name = "pvm-contract-macros"
 version = "0.3.0"
+source = "git+https://github.com/paritytech/cargo-pvm-contract?rev=586425ca#586425cae76f10af61a84070bf657296194ab4c0"
 dependencies = [
  "keccak-const",
  "proc-macro2",
@@ -686,6 +689,7 @@ dependencies = [
 [[package]]
 name = "pvm-contract-types"
 version = "0.3.0"
+source = "git+https://github.com/paritytech/cargo-pvm-contract?rev=586425ca#586425cae76f10af61a84070bf657296194ab4c0"
 dependencies = [
  "const_format",
  "keccak-const",

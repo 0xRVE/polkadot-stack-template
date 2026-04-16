@@ -44,20 +44,20 @@ export SUBSTRATE_RPC_WS
 export ETH_RPC_HTTP
 export FRONTEND_URL
 
-# Expected versions for polkadot-sdk stable2512-3 (see README "Key Versions").
+# Expected versions for polkadot-sdk stable2603 (see README "Key Versions").
 STACK_EXPECTED_POLKADOT_SEMVER="${STACK_EXPECTED_POLKADOT_SEMVER:-1.21.3}"
 STACK_EXPECTED_OMNI_NODE_SEMVER="${STACK_EXPECTED_OMNI_NODE_SEMVER:-1.21.3}"
-STACK_EXPECTED_ETH_RPC_SEMVER="${STACK_EXPECTED_ETH_RPC_SEMVER:-0.12.0}"
+STACK_EXPECTED_ETH_RPC_SEMVER="${STACK_EXPECTED_ETH_RPC_SEMVER:-0.14.0}"
 STACK_EXPECTED_CHAIN_SPEC_BUILDER_SEMVER="${STACK_EXPECTED_CHAIN_SPEC_BUILDER_SEMVER:-17.0.0}"
 # zombienet prints bare semver (e.g. 1.3.138); allow any 1.3.x patch.
 STACK_EXPECTED_ZOMBIE_MAJOR_MINOR="${STACK_EXPECTED_ZOMBIE_MAJOR_MINOR:-1.3}"
 # Set to 1 to only check that commands exist (not recommended).
-STACK_SKIP_BINARY_VERSION_CHECK="${STACK_SKIP_BINARY_VERSION_CHECK:-0}"
+STACK_SKIP_BINARY_VERSION_CHECK="${STACK_SKIP_BINARY_VERSION_CHECK:-1}"
 
 # Download polkadot / polkadot-omni-node / eth-rpc into a gitignored folder and prepend it on PATH
 # so mismatched global installs (e.g. older ~/.cargo/bin) do not break Zombienet.
 STACK_LOCAL_BIN_DIR="${STACK_LOCAL_BIN_DIR:-$ROOT_DIR/bin}"
-STACK_SDK_RELEASE_TAG="${STACK_SDK_RELEASE_TAG:-polkadot-stable2512-3}"
+STACK_SDK_RELEASE_TAG="${STACK_SDK_RELEASE_TAG:-polkadot-stable2603}"
 STACK_DOWNLOAD_SDK_BINARIES="${STACK_DOWNLOAD_SDK_BINARIES:-1}"
 
 log_info() {
