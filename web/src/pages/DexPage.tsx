@@ -110,6 +110,12 @@ export default function DexPage() {
 	// Remove liquidity state
 	const [removeLpAmount, setRemoveLpAmount] = useState("1000000000000");
 
+	// Pool info
+	const [poolReserves, setPoolReserves] = useState<{
+		rate1to2: string;
+		rate2to1: string;
+	} | null>(null);
+
 	const account = evmDevAccounts[accountIdx].account;
 
 	const report = (msg: string, err = false) => {
@@ -164,6 +170,44 @@ export default function DexPage() {
 		return () => clearInterval(interval);
 	}, [fetchBalances]);
 
+	const fetchPoolInfo = useCallback(async () => {
+		if (!connected) return;
+		const pub_ = getPublicClient(ethRpcUrl);
+		const probeAmount = 1_000_000_000_000n; // 1e12
+		try {
+			const [fwd, rev] = await Promise.all([
+				pub_.readContract({
+					address: ASSET_CONVERSION_PRECOMPILE_ADDRESS,
+					abi: assetConversionAbi,
+					functionName: "quoteExactTokensForTokens",
+					args: [ASSETS[poolAsset1].encoded, ASSETS[poolAsset2].encoded, probeAmount, true],
+				}).catch(() => null),
+				pub_.readContract({
+					address: ASSET_CONVERSION_PRECOMPILE_ADDRESS,
+					abi: assetConversionAbi,
+					functionName: "quoteExactTokensForTokens",
+					args: [ASSETS[poolAsset2].encoded, ASSETS[poolAsset1].encoded, probeAmount, true],
+				}).catch(() => null),
+			]);
+			if (fwd !== null && rev !== null) {
+				setPoolReserves({
+					rate1to2: `${probeAmount} ${ASSETS[poolAsset1].label} = ${fwd} ${ASSETS[poolAsset2].label}`,
+					rate2to1: `${probeAmount} ${ASSETS[poolAsset2].label} = ${rev} ${ASSETS[poolAsset1].label}`,
+				});
+			} else {
+				setPoolReserves(null);
+			}
+		} catch {
+			setPoolReserves(null);
+		}
+	}, [connected, ethRpcUrl, poolAsset1, poolAsset2]);
+
+	useEffect(() => {
+		fetchPoolInfo();
+		const interval = setInterval(fetchPoolInfo, 6000);
+		return () => clearInterval(interval);
+	}, [fetchPoolInfo]);
+
 	const getQuote = async () => {
 		if (!connected) return report("Not connected", true);
 		setLoading(true);
@@ -199,13 +243,14 @@ export default function DexPage() {
 				address: ASSET_CONVERSION_PRECOMPILE_ADDRESS,
 				abi: assetConversionAbi,
 				functionName: "swapExactTokensForTokens",
-				args: [path, BigInt(swapAmount), 0n, account.address, false],
+				args: [path, BigInt(swapAmount), 1n, account.address, false],
 				gas: 5_000_000n,
 			});
 			const receipt = await pub_.waitForTransactionReceipt({ hash, timeout: 60_000 });
 			addTx("Swap", receipt.blockNumber, hash, receipt.status);
 			report(`Swap confirmed in block ${receipt.blockNumber}`);
 			fetchBalances();
+			fetchPoolInfo();
 		} catch (e: unknown) {
 			report(
 				`Swap failed: ${e instanceof Error ? e.message.slice(0, 120) : String(e)}`,
@@ -226,6 +271,7 @@ export default function DexPage() {
 				abi: assetConversionAbi,
 				functionName: "createPool",
 				args: [ASSETS[poolAsset1].encoded, ASSETS[poolAsset2].encoded],
+				gas: 5_000_000n,
 			});
 			const receipt = await pub_.waitForTransactionReceipt({ hash, timeout: 60_000 });
 			addTx("Create Pool", receipt.blockNumber, hash, receipt.status);
@@ -258,11 +304,13 @@ export default function DexPage() {
 					0n,
 					account.address,
 				],
+				gas: 5_000_000n,
 			});
 			const receipt = await pub_.waitForTransactionReceipt({ hash, timeout: 60_000 });
 			addTx("Add Liquidity", receipt.blockNumber, hash, receipt.status);
 			report(`Liquidity added in block ${receipt.blockNumber}`);
 			fetchBalances();
+			fetchPoolInfo();
 		} catch (e: unknown) {
 			report(
 				`Add liquidity failed: ${e instanceof Error ? e.message.slice(0, 120) : String(e)}`,
@@ -296,6 +344,7 @@ export default function DexPage() {
 			addTx("Remove Liquidity", receipt.blockNumber, hash, receipt.status);
 			report(`Liquidity removed in block ${receipt.blockNumber}`);
 			fetchBalances();
+			fetchPoolInfo();
 		} catch (e: unknown) {
 			report(
 				`Remove liquidity failed: ${e instanceof Error ? e.message.slice(0, 120) : String(e)}`,
@@ -416,6 +465,19 @@ export default function DexPage() {
 			{/* Pool section */}
 			<div className="card">
 				<h2 className="text-lg font-semibold font-display mb-4">Pool Management</h2>
+
+				{poolReserves ? (
+					<div className="mb-4 rounded-lg border border-blue-500/20 bg-blue-500/[0.06] px-4 py-3 text-sm">
+						<div className="text-xs font-medium text-text-secondary mb-1">Pool Rates</div>
+						<div className="font-mono text-xs">{poolReserves.rate1to2}</div>
+						<div className="font-mono text-xs">{poolReserves.rate2to1}</div>
+					</div>
+				) : (
+					<div className="mb-4 rounded-lg border border-white/[0.08] bg-white/[0.04] px-4 py-3 text-xs text-text-secondary">
+						No pool found for selected pair
+					</div>
+				)}
+
 				<div className="grid grid-cols-2 gap-3">
 					<div>
 						<label className="block text-xs font-medium text-text-secondary mb-1">

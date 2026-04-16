@@ -75,6 +75,8 @@ fn testnet_genesis(
 					vec![(TEST_ASSET_A, acc.clone(), 1u128 << 60), (TEST_ASSET_B, acc, 1u128 << 60)]
 				})
 				.collect(),
+			// Start LP token IDs at 100 so they don't collide with test assets (1, 2).
+			next_asset_id: Some(100),
 		},
 	})
 }
