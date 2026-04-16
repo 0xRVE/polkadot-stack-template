@@ -478,7 +478,7 @@ export default function DexPage() {
 							value={swapFrom}
 							onChange={(e) => setSwapFrom(e.target.value as AssetKey)}
 						>
-							{assetOptions.map((a) => (
+							{assetOptions.filter((a) => a.key !== swapTo).map((a) => (
 								<option key={a.key} value={a.key}>
 									{a.label}
 								</option>
@@ -494,7 +494,7 @@ export default function DexPage() {
 							value={swapTo}
 							onChange={(e) => setSwapTo(e.target.value as AssetKey)}
 						>
-							{assetOptions.map((a) => (
+							{assetOptions.filter((a) => a.key !== swapFrom).map((a) => (
 								<option key={a.key} value={a.key}>
 									{a.label}
 								</option>
@@ -556,7 +556,7 @@ export default function DexPage() {
 							value={poolAsset1}
 							onChange={(e) => setPoolAsset1(e.target.value as AssetKey)}
 						>
-							{assetOptions.map((a) => (
+							{assetOptions.filter((a) => a.key !== poolAsset2).map((a) => (
 								<option key={a.key} value={a.key}>
 									{a.label}
 								</option>
@@ -572,7 +572,7 @@ export default function DexPage() {
 							value={poolAsset2}
 							onChange={(e) => setPoolAsset2(e.target.value as AssetKey)}
 						>
-							{assetOptions.map((a) => (
+							{assetOptions.filter((a) => a.key !== poolAsset1).map((a) => (
 								<option key={a.key} value={a.key}>
 									{a.label}
 								</option>
@@ -605,8 +605,8 @@ export default function DexPage() {
 					</div>
 				</div>
 				<div className="mt-4 flex gap-3">
-					<button className="btn-secondary" onClick={createPool} disabled={loading}>
-						Create Pool
+					<button className="btn-secondary" onClick={createPool} disabled={loading || !!poolReserves}>
+						{poolReserves ? "Pool Exists" : "Create Pool"}
 					</button>
 					<button className="btn-primary" onClick={addLiquidity} disabled={loading}>
 						{loading ? "Adding..." : "Add Liquidity"}
