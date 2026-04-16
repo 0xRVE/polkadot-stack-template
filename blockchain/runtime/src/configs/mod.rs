@@ -325,6 +325,13 @@ impl pallet_assets::Config for Runtime {
 	type BenchmarkHelper = ();
 }
 
+// ── pallet-assets-precompiles permit (EIP-2612 gasless approvals) ─────
+
+impl pallet_assets_precompiles::PermitConfig for Runtime {
+	type ChainId = ConstU64<420_420_421>;
+	type WeightInfo = ();
+}
+
 // ── pallet-assets Instance2 (LP tokens for DEX pools) ────────────────
 //
 // Separate instance so LP token IDs never collide with user-created assets.

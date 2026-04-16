@@ -259,6 +259,8 @@ mod runtime {
 	pub type AssetConversion = pallet_asset_conversion;
 	#[runtime::pallet_index(62)]
 	pub type PoolAssets = pallet_assets<Instance2>;
+	#[runtime::pallet_index(63)]
+	pub type AssetsPermit = pallet_assets_precompiles::permit;
 
 	// Smart contracts (EVM + PVM via pallet-revive)
 	#[runtime::pallet_index(90)]
