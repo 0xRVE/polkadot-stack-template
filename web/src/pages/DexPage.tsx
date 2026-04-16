@@ -132,6 +132,66 @@ export default function DexPage() {
 		]);
 	};
 
+	/** Extract a human-readable reason from an error message. */
+	const extractReason = (e: unknown): string => {
+		const raw = e instanceof Error ? e.message : String(e);
+		// Also check .cause and .details (viem nests errors deeply)
+		const msg =
+			raw +
+			(e instanceof Error && "shortMessage" in e
+				? " " + (e as { shortMessage: string }).shortMessage
+				: "") +
+			(e instanceof Error && "details" in e ? " " + (e as { details: string }).details : "");
+		// eth-rpc surfaces pallet errors as 'message: Some("PoolExists")'
+		const moduleMatch = msg.match(/message:\s*Some\("([^"]+)"\)/);
+		if (moduleMatch) return moduleMatch[1];
+		// Also matches: "failed to run contract: Module(ModuleError { ... message: Some("X") })"
+		const detailsMatch = msg.match(/Details:\s*(.+?)(?:\n|Version:)/s);
+		if (detailsMatch) {
+			const details = detailsMatch[1].trim();
+			const innerModule = details.match(/message:\s*Some\("([^"]+)"\)/);
+			if (innerModule) return innerModule[1];
+			return details.slice(0, 150);
+		}
+		// Solidity-style revert reason
+		const revertMatch = msg.match(/reverted with reason string '([^']+)'/);
+		if (revertMatch) return revertMatch[1];
+		// Fallback: viem shortMessage is usually the most useful
+		if (e instanceof Error && "shortMessage" in e) {
+			return (e as { shortMessage: string }).shortMessage.slice(0, 150);
+		}
+		return raw.slice(0, 150);
+	};
+
+	/** Send a write tx, check receipt status, report + log result.
+	 *  If the receipt shows revert, replays the tx as eth_call to extract the reason. */
+	const sendAndReport = async (action: string, sendFn: () => Promise<Hex>) => {
+		const pub_ = getPublicClient(ethRpcUrl);
+		const hash = await sendFn();
+		const receipt = await pub_.waitForTransactionReceipt({ hash, timeout: 60_000 });
+		addTx(action, receipt.blockNumber, hash, receipt.status);
+		if (receipt.status === "reverted") {
+			// Try to get the revert reason by replaying the tx as eth_call
+			let reason = "unknown reason";
+			try {
+				const tx = await pub_.getTransaction({ hash });
+				await pub_.call({
+					to: tx.to!,
+					data: tx.input,
+					account: tx.from,
+					gas: tx.gas,
+					blockNumber: receipt.blockNumber,
+				});
+			} catch (replayErr: unknown) {
+				reason = extractReason(replayErr);
+			}
+			report(`${action} reverted in block ${receipt.blockNumber}: ${reason}`, true);
+			return null;
+		}
+		report(`${action} confirmed in block ${receipt.blockNumber}`);
+		return receipt;
+	};
+
 	const fetchBalances = useCallback(async () => {
 		if (!connected) return;
 		try {
@@ -254,26 +314,23 @@ export default function DexPage() {
 		setLoading(true);
 		try {
 			const wallet = await getWalletClient(accountIdx, ethRpcUrl);
-			const pub_ = getPublicClient(ethRpcUrl);
 			const path = [ASSETS[swapFrom].encoded, ASSETS[swapTo].encoded];
 
-			const hash = await wallet.writeContract({
-				address: ASSET_CONVERSION_PRECOMPILE_ADDRESS,
-				abi: assetConversionAbi,
-				functionName: "swapExactTokensForTokens",
-				args: [path, BigInt(swapAmount), 1n, account.address, false],
-				gas: 5_000_000n,
-			});
-			const receipt = await pub_.waitForTransactionReceipt({ hash, timeout: 60_000 });
-			addTx("Swap", receipt.blockNumber, hash, receipt.status);
-			report(`Swap confirmed in block ${receipt.blockNumber}`);
-			fetchBalances();
-			fetchPoolInfo();
-		} catch (e: unknown) {
-			report(
-				`Swap failed: ${e instanceof Error ? e.message.slice(0, 120) : String(e)}`,
-				true,
+			const receipt = await sendAndReport("Swap", () =>
+				wallet.writeContract({
+					address: ASSET_CONVERSION_PRECOMPILE_ADDRESS,
+					abi: assetConversionAbi,
+					functionName: "swapExactTokensForTokens",
+					args: [path, BigInt(swapAmount), 1n, account.address, false],
+					gas: 5_000_000n,
+				}),
 			);
+			if (receipt) {
+				fetchBalances();
+				fetchPoolInfo();
+			}
+		} catch (e: unknown) {
+			report(`Swap failed: ${extractReason(e)}`, true);
 		}
 	};
 
@@ -282,23 +339,18 @@ export default function DexPage() {
 		setLoading(true);
 		try {
 			const wallet = await getWalletClient(accountIdx, ethRpcUrl);
-			const pub_ = getPublicClient(ethRpcUrl);
 
-			const hash = await wallet.writeContract({
-				address: ASSET_CONVERSION_PRECOMPILE_ADDRESS,
-				abi: assetConversionAbi,
-				functionName: "createPool",
-				args: [ASSETS[poolAsset1].encoded, ASSETS[poolAsset2].encoded],
-				gas: 5_000_000n,
-			});
-			const receipt = await pub_.waitForTransactionReceipt({ hash, timeout: 60_000 });
-			addTx("Create Pool", receipt.blockNumber, hash, receipt.status);
-			report(`Pool created in block ${receipt.blockNumber}`);
-		} catch (e: unknown) {
-			report(
-				`Create pool failed: ${e instanceof Error ? e.message.slice(0, 120) : String(e)}`,
-				true,
+			await sendAndReport("Create Pool", () =>
+				wallet.writeContract({
+					address: ASSET_CONVERSION_PRECOMPILE_ADDRESS,
+					abi: assetConversionAbi,
+					functionName: "createPool",
+					args: [ASSETS[poolAsset1].encoded, ASSETS[poolAsset2].encoded],
+					gas: 5_000_000n,
+				}),
 			);
+		} catch (e: unknown) {
+			report(`Create pool failed: ${extractReason(e)}`, true);
 		}
 	};
 
@@ -307,33 +359,30 @@ export default function DexPage() {
 		setLoading(true);
 		try {
 			const wallet = await getWalletClient(accountIdx, ethRpcUrl);
-			const pub_ = getPublicClient(ethRpcUrl);
 
-			const hash = await wallet.writeContract({
-				address: ASSET_CONVERSION_PRECOMPILE_ADDRESS,
-				abi: assetConversionAbi,
-				functionName: "addLiquidity",
-				args: [
-					ASSETS[poolAsset1].encoded,
-					ASSETS[poolAsset2].encoded,
-					BigInt(poolAmount1),
-					BigInt(poolAmount2),
-					0n,
-					0n,
-					account.address,
-				],
-				gas: 5_000_000n,
-			});
-			const receipt = await pub_.waitForTransactionReceipt({ hash, timeout: 60_000 });
-			addTx("Add Liquidity", receipt.blockNumber, hash, receipt.status);
-			report(`Liquidity added in block ${receipt.blockNumber}`);
-			fetchBalances();
-			fetchPoolInfo();
-		} catch (e: unknown) {
-			report(
-				`Add liquidity failed: ${e instanceof Error ? e.message.slice(0, 120) : String(e)}`,
-				true,
+			const receipt = await sendAndReport("Add Liquidity", () =>
+				wallet.writeContract({
+					address: ASSET_CONVERSION_PRECOMPILE_ADDRESS,
+					abi: assetConversionAbi,
+					functionName: "addLiquidity",
+					args: [
+						ASSETS[poolAsset1].encoded,
+						ASSETS[poolAsset2].encoded,
+						BigInt(poolAmount1),
+						BigInt(poolAmount2),
+						0n,
+						0n,
+						account.address,
+					],
+					gas: 5_000_000n,
+				}),
 			);
+			if (receipt) {
+				fetchBalances();
+				fetchPoolInfo();
+			}
+		} catch (e: unknown) {
+			report(`Add liquidity failed: ${extractReason(e)}`, true);
 		}
 	};
 
@@ -342,32 +391,29 @@ export default function DexPage() {
 		setLoading(true);
 		try {
 			const wallet = await getWalletClient(accountIdx, ethRpcUrl);
-			const pub_ = getPublicClient(ethRpcUrl);
 
-			const hash = await wallet.writeContract({
-				address: ASSET_CONVERSION_PRECOMPILE_ADDRESS,
-				abi: assetConversionAbi,
-				functionName: "removeLiquidity",
-				args: [
-					ASSETS[poolAsset1].encoded,
-					ASSETS[poolAsset2].encoded,
-					BigInt(removeLpAmount),
-					0n,
-					0n,
-					account.address,
-				],
-				gas: 5_000_000n,
-			});
-			const receipt = await pub_.waitForTransactionReceipt({ hash, timeout: 60_000 });
-			addTx("Remove Liquidity", receipt.blockNumber, hash, receipt.status);
-			report(`Liquidity removed in block ${receipt.blockNumber}`);
-			fetchBalances();
-			fetchPoolInfo();
-		} catch (e: unknown) {
-			report(
-				`Remove liquidity failed: ${e instanceof Error ? e.message.slice(0, 120) : String(e)}`,
-				true,
+			const receipt = await sendAndReport("Remove Liquidity", () =>
+				wallet.writeContract({
+					address: ASSET_CONVERSION_PRECOMPILE_ADDRESS,
+					abi: assetConversionAbi,
+					functionName: "removeLiquidity",
+					args: [
+						ASSETS[poolAsset1].encoded,
+						ASSETS[poolAsset2].encoded,
+						BigInt(removeLpAmount),
+						0n,
+						0n,
+						account.address,
+					],
+					gas: 5_000_000n,
+				}),
 			);
+			if (receipt) {
+				fetchBalances();
+				fetchPoolInfo();
+			}
+		} catch (e: unknown) {
+			report(`Remove liquidity failed: ${extractReason(e)}`, true);
 		}
 	};
 
