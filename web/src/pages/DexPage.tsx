@@ -480,17 +480,39 @@ export default function DexPage() {
 				</div>
 
 				<div className="mt-3 grid grid-cols-3 gap-2">
-					{assetOptions.map((a) => (
-						<div
-							key={a.key}
-							className="rounded-lg border border-white/[0.08] bg-white/[0.04] px-3 py-2"
-						>
-							<div className="text-xs text-text-secondary">{a.label}</div>
-							<div className="text-sm font-mono mt-0.5 truncate">
-								{balances[a.key]}
+					{assetOptions.map((a) => {
+						const raw = balances[a.key];
+						if (a.key === "native" && raw !== "-") {
+							const big = BigInt(raw);
+							const units = big / 1_000_000n;
+							const dust = big % 1_000_000n;
+							return (
+								<div
+									key={a.key}
+									className="rounded-lg border border-white/[0.08] bg-white/[0.04] px-3 py-2"
+								>
+									<div className="text-xs text-text-secondary">{a.label}</div>
+									<div className="text-sm font-mono mt-0.5 truncate">
+										{units.toString()}
+									</div>
+									{dust > 0n && (
+										<div className="text-[10px] font-mono text-text-secondary truncate">
+											+{dust.toString()} dust
+										</div>
+									)}
+								</div>
+							);
+						}
+						return (
+							<div
+								key={a.key}
+								className="rounded-lg border border-white/[0.08] bg-white/[0.04] px-3 py-2"
+							>
+								<div className="text-xs text-text-secondary">{a.label}</div>
+								<div className="text-sm font-mono mt-0.5 truncate">{raw}</div>
 							</div>
-						</div>
-					))}
+						);
+					})}
 				</div>
 			</div>
 
