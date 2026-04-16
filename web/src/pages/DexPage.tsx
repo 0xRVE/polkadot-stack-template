@@ -125,11 +125,34 @@ export default function DexPage() {
 		testB: "-",
 	});
 
-	// Swap state
-	const [swapFrom, setSwapFrom] = useState<AssetKey>("native");
-	const [swapTo, setSwapTo] = useState<AssetKey>("testA");
+	// Swap state — path supports multi-hop (e.g. native → testA → testB)
+	const [swapPath, setSwapPath] = useState<AssetKey[]>(["native", "testA"]);
 	const [swapAmount, setSwapAmount] = useState("1000000000000");
 	const [quoteResult, setQuoteResult] = useState("");
+
+	const swapFrom = swapPath[0];
+	const swapTo = swapPath[swapPath.length - 1];
+
+	const updateSwapPath = (index: number, value: AssetKey) => {
+		setSwapPath((prev) => {
+			const next = [...prev];
+			next[index] = value;
+			return next;
+		});
+	};
+
+	const addSwapHop = () => {
+		if (swapPath.length >= 4) return; // MaxSwapPathLength = 4
+		// Pick the first asset not already at the end
+		const last = swapPath[swapPath.length - 1];
+		const candidate = assetOptions.find((a) => a.key !== last);
+		if (candidate) setSwapPath((prev) => [...prev, candidate.key]);
+	};
+
+	const removeSwapHop = () => {
+		if (swapPath.length <= 2) return;
+		setSwapPath((prev) => prev.slice(0, -1));
+	};
 
 	// Pool state
 	const [poolAsset1, setPoolAsset1] = useState<AssetKey>("native");
@@ -339,21 +362,26 @@ export default function DexPage() {
 		setLoading(true);
 		try {
 			const pub_ = getPublicClient(ethRpcUrl);
-			const result = await pub_.readContract({
-				address: ASSET_CONVERSION_PRECOMPILE_ADDRESS,
-				abi: assetConversionAbi,
-				functionName: "quoteExactTokensForTokens",
-				args: [ASSETS[swapFrom].encoded, ASSETS[swapTo].encoded, BigInt(swapAmount), true],
-			});
-			setQuoteResult(result.toString());
-			report(
-				`Quote: ${swapAmount} ${ASSETS[swapFrom].label} => ${result.toString()} ${ASSETS[swapTo].label}`,
-			);
+			// Chain quotes hop-by-hop for multi-hop paths
+			let currentAmount = BigInt(swapAmount);
+			for (let i = 0; i < swapPath.length - 1; i++) {
+				currentAmount = await pub_.readContract({
+					address: ASSET_CONVERSION_PRECOMPILE_ADDRESS,
+					abi: assetConversionAbi,
+					functionName: "quoteExactTokensForTokens",
+					args: [
+						ASSETS[swapPath[i]].encoded,
+						ASSETS[swapPath[i + 1]].encoded,
+						currentAmount,
+						true,
+					],
+				});
+			}
+			setQuoteResult(currentAmount.toString());
+			const route = swapPath.map((k) => ASSETS[k].label).join(" → ");
+			report(`Quote: ${swapAmount} ${route} => ${currentAmount.toString()}`);
 		} catch (e: unknown) {
-			report(
-				`Quote failed: ${e instanceof Error ? e.message.slice(0, 120) : String(e)}`,
-				true,
-			);
+			report(`Quote failed: ${extractReason(e)}`, true);
 		}
 	};
 
@@ -362,7 +390,7 @@ export default function DexPage() {
 		setLoading(true);
 		try {
 			const wallet = await getWalletClient(accountIdx, ethRpcUrl);
-			const path = [ASSETS[swapFrom].encoded, ASSETS[swapTo].encoded];
+			const path = swapPath.map((k) => ASSETS[k].encoded);
 
 			const receipt = await sendAndReport("Swap", () =>
 				wallet.writeContract({
@@ -533,42 +561,50 @@ export default function DexPage() {
 			{/* Swap section */}
 			<div className="card">
 				<h2 className="text-lg font-semibold font-display mb-4">Swap</h2>
-				<div className="grid grid-cols-2 gap-3">
-					<div>
-						<label className="block text-xs font-medium text-text-secondary mb-1">
-							From
-						</label>
-						<select
-							className="w-full rounded-lg border border-white/[0.08] bg-white/[0.04] px-3 py-2 text-sm"
-							value={swapFrom}
-							onChange={(e) => setSwapFrom(e.target.value as AssetKey)}
+				<div className="space-y-2">
+					{swapPath.map((asset, i) => (
+						<div key={i} className="flex items-center gap-2">
+							<label className="text-xs font-medium text-text-secondary w-12 shrink-0">
+								{i === 0 ? "From" : i === swapPath.length - 1 ? "To" : `Via`}
+							</label>
+							<select
+								className="flex-1 rounded-lg border border-white/[0.08] bg-white/[0.04] px-3 py-2 text-sm"
+								value={asset}
+								onChange={(e) => updateSwapPath(i, e.target.value as AssetKey)}
+							>
+								{assetOptions
+									.filter((a) => {
+										const prev = i > 0 ? swapPath[i - 1] : null;
+										const next = i < swapPath.length - 1 ? swapPath[i + 1] : null;
+										return a.key !== prev && a.key !== next;
+									})
+									.map((a) => (
+										<option key={a.key} value={a.key}>
+											{a.label}
+										</option>
+									))}
+							</select>
+							{i < swapPath.length - 1 && (
+								<span className="text-text-secondary text-xs">→</span>
+							)}
+						</div>
+					))}
+					<div className="flex gap-2">
+						<button
+							className="text-xs text-text-secondary hover:text-text-primary"
+							onClick={addSwapHop}
+							disabled={swapPath.length >= 4}
 						>
-							{assetOptions
-								.filter((a) => a.key !== swapTo)
-								.map((a) => (
-									<option key={a.key} value={a.key}>
-										{a.label}
-									</option>
-								))}
-						</select>
-					</div>
-					<div>
-						<label className="block text-xs font-medium text-text-secondary mb-1">
-							To
-						</label>
-						<select
-							className="w-full rounded-lg border border-white/[0.08] bg-white/[0.04] px-3 py-2 text-sm"
-							value={swapTo}
-							onChange={(e) => setSwapTo(e.target.value as AssetKey)}
-						>
-							{assetOptions
-								.filter((a) => a.key !== swapFrom)
-								.map((a) => (
-									<option key={a.key} value={a.key}>
-										{a.label}
-									</option>
-								))}
-						</select>
+							+ Add hop
+						</button>
+						{swapPath.length > 2 && (
+							<button
+								className="text-xs text-text-secondary hover:text-text-primary"
+								onClick={removeSwapHop}
+							>
+								- Remove hop
+							</button>
+						)}
 					</div>
 				</div>
 				<div className="mt-3">

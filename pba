@@ -61,3 +61,5 @@ Option 1 is used in this project.
 
 - create pool mints a new token but it start with token_id 0. For the first pool this works but for the second pool it collides with TSTA (id=1). workaround: start AssetsConfig::next_asset_id at higher offset. Solution: another instance of pallet-assets.
 - added pallet-assets instance for PoolAssets
+- added multihop swap
+- empty pool is treated as non-existent pool by asset-conversion (bad UX imho): https://github.com/paritytech/polkadot-sdk/pull/11798
