@@ -575,7 +575,8 @@ export default function DexPage() {
 								{assetOptions
 									.filter((a) => {
 										const prev = i > 0 ? swapPath[i - 1] : null;
-										const next = i < swapPath.length - 1 ? swapPath[i + 1] : null;
+										const next =
+											i < swapPath.length - 1 ? swapPath[i + 1] : null;
 										return a.key !== prev && a.key !== next;
 									})
 									.map((a) => (
@@ -627,7 +628,9 @@ export default function DexPage() {
 					<div className="mt-2 text-sm text-text-secondary font-mono">
 						Expected output: {quoteResult}
 						{nativeHint(quoteResult, swapTo) && (
-							<span className="text-[10px] ml-2">{nativeHint(quoteResult, swapTo)}</span>
+							<span className="text-[10px] ml-2">
+								{nativeHint(quoteResult, swapTo)}
+							</span>
 						)}
 					</div>
 				)}
