@@ -42,3 +42,6 @@ Additionally discovered that #[cfg_attr(not(test), pvm_contract_macros::method)]
 
 - problem as with eth-rpc being crappy on stable2512. After upgrading to stable2603 the tests were running reliably.
 - need to run eth-rpc like this to avoid storing state `./bin/eth-rpc --node-rpc-url ws://127.0.0.1:9944 --rpc-cors all --eth-pruning 1`
+
+## 16-04-2026
+- small fix to CI
