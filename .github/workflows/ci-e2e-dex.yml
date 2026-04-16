@@ -15,7 +15,7 @@ concurrency:
 
 env:
   CARGO_TERM_COLOR: always
-  STACK_SDK_RELEASE_TAG: polkadot-stable2512-3
+  STACK_SDK_RELEASE_TAG: polkadot-stable2603
 
 jobs:
   e2e:
