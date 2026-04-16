@@ -67,7 +67,8 @@ function TxHistory({ records }: { records: TxRecord[] }) {
 							</span>
 						</div>
 						<div className="text-text-secondary">
-							Block: <span className="text-text-primary">{r.blockNumber.toString()}</span>
+							Block:{" "}
+							<span className="text-text-primary">{r.blockNumber.toString()}</span>
 							{" | "}
 							Tx: <span className="text-text-primary">{r.txHash}</span>
 						</div>
@@ -125,7 +126,10 @@ export default function DexPage() {
 	};
 
 	const addTx = (action: string, blockNumber: bigint, txHash: string, status: string) => {
-		setTxHistory((prev) => [{ action, blockNumber, txHash, status, timestamp: Date.now() }, ...prev]);
+		setTxHistory((prev) => [
+			{ action, blockNumber, txHash, status, timestamp: Date.now() },
+			...prev,
+		]);
 	};
 
 	const fetchBalances = useCallback(async () => {
@@ -176,18 +180,32 @@ export default function DexPage() {
 		const probeAmount = 1_000_000_000_000n; // 1e12
 		try {
 			const [fwd, rev] = await Promise.all([
-				pub_.readContract({
-					address: ASSET_CONVERSION_PRECOMPILE_ADDRESS,
-					abi: assetConversionAbi,
-					functionName: "quoteExactTokensForTokens",
-					args: [ASSETS[poolAsset1].encoded, ASSETS[poolAsset2].encoded, probeAmount, true],
-				}).catch(() => null),
-				pub_.readContract({
-					address: ASSET_CONVERSION_PRECOMPILE_ADDRESS,
-					abi: assetConversionAbi,
-					functionName: "quoteExactTokensForTokens",
-					args: [ASSETS[poolAsset2].encoded, ASSETS[poolAsset1].encoded, probeAmount, true],
-				}).catch(() => null),
+				pub_
+					.readContract({
+						address: ASSET_CONVERSION_PRECOMPILE_ADDRESS,
+						abi: assetConversionAbi,
+						functionName: "quoteExactTokensForTokens",
+						args: [
+							ASSETS[poolAsset1].encoded,
+							ASSETS[poolAsset2].encoded,
+							probeAmount,
+							true,
+						],
+					})
+					.catch(() => null),
+				pub_
+					.readContract({
+						address: ASSET_CONVERSION_PRECOMPILE_ADDRESS,
+						abi: assetConversionAbi,
+						functionName: "quoteExactTokensForTokens",
+						args: [
+							ASSETS[poolAsset2].encoded,
+							ASSETS[poolAsset1].encoded,
+							probeAmount,
+							true,
+						],
+					})
+					.catch(() => null),
 			]);
 			if (fwd !== null && rev !== null) {
 				setPoolReserves({
@@ -393,7 +411,9 @@ export default function DexPage() {
 							className="rounded-lg border border-white/[0.08] bg-white/[0.04] px-3 py-2"
 						>
 							<div className="text-xs text-text-secondary">{a.label}</div>
-							<div className="text-sm font-mono mt-0.5 truncate">{balances[a.key]}</div>
+							<div className="text-sm font-mono mt-0.5 truncate">
+								{balances[a.key]}
+							</div>
 						</div>
 					))}
 				</div>
@@ -468,7 +488,9 @@ export default function DexPage() {
 
 				{poolReserves ? (
 					<div className="mb-4 rounded-lg border border-blue-500/20 bg-blue-500/[0.06] px-4 py-3 text-sm">
-						<div className="text-xs font-medium text-text-secondary mb-1">Pool Rates</div>
+						<div className="text-xs font-medium text-text-secondary mb-1">
+							Pool Rates
+						</div>
 						<div className="font-mono text-xs">{poolReserves.rate1to2}</div>
 						<div className="font-mono text-xs">{poolReserves.rate2to1}</div>
 					</div>
