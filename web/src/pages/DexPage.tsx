@@ -22,6 +22,16 @@ const erc20BalanceAbi = parseAbi([
 	"function balanceOf(address account) external view returns (uint256)",
 ]);
 
+// LP token ERC20 precompile addresses (Instance2, prefix 0x0220).
+// Address layout: [id_be32][zeros(12)][0x02,0x20][zeros(2)]
+function lpTokenAddress(id: number): Hex {
+	const idHex = id.toString(16).padStart(8, "0");
+	return `0x${idHex}00000000000000000000000002200000` as Hex;
+}
+// LP tokens are auto-incremented in PoolAssets (Instance2).
+// Check IDs 0-9 to cover pools created on a fresh chain.
+const LP_TOKEN_IDS = [0, 1, 2, 3, 4, 5, 6, 7, 8, 9];
+
 type TxRecord = {
 	action: string;
 	blockNumber: bigint;
@@ -116,6 +126,7 @@ export default function DexPage() {
 		rate1to2: string;
 		rate2to1: string;
 	} | null>(null);
+	const [lpBalance, setLpBalance] = useState<string | null>(null);
 
 	const account = evmDevAccounts[accountIdx].account;
 
@@ -275,10 +286,28 @@ export default function DexPage() {
 			} else {
 				setPoolReserves(null);
 			}
+
+			// Query LP token balances across all possible pool LP tokens
+			let totalLp = 0n;
+			for (const id of LP_TOKEN_IDS) {
+				try {
+					const bal = await pub_.readContract({
+						address: lpTokenAddress(id),
+						abi: erc20BalanceAbi,
+						functionName: "balanceOf",
+						args: [account.address],
+					});
+					totalLp += bal;
+				} catch {
+					// LP token doesn't exist or no balance
+				}
+			}
+			setLpBalance(totalLp > 0n ? totalLp.toString() : null);
 		} catch {
 			setPoolReserves(null);
+			setLpBalance(null);
 		}
-	}, [connected, ethRpcUrl, poolAsset1, poolAsset2]);
+	}, [connected, ethRpcUrl, poolAsset1, poolAsset2, account.address]);
 
 	useEffect(() => {
 		fetchPoolInfo();
@@ -478,11 +507,13 @@ export default function DexPage() {
 							value={swapFrom}
 							onChange={(e) => setSwapFrom(e.target.value as AssetKey)}
 						>
-							{assetOptions.filter((a) => a.key !== swapTo).map((a) => (
-								<option key={a.key} value={a.key}>
-									{a.label}
-								</option>
-							))}
+							{assetOptions
+								.filter((a) => a.key !== swapTo)
+								.map((a) => (
+									<option key={a.key} value={a.key}>
+										{a.label}
+									</option>
+								))}
 						</select>
 					</div>
 					<div>
@@ -494,11 +525,13 @@ export default function DexPage() {
 							value={swapTo}
 							onChange={(e) => setSwapTo(e.target.value as AssetKey)}
 						>
-							{assetOptions.filter((a) => a.key !== swapFrom).map((a) => (
-								<option key={a.key} value={a.key}>
-									{a.label}
-								</option>
-							))}
+							{assetOptions
+								.filter((a) => a.key !== swapFrom)
+								.map((a) => (
+									<option key={a.key} value={a.key}>
+										{a.label}
+									</option>
+								))}
 						</select>
 					</div>
 				</div>
@@ -556,11 +589,13 @@ export default function DexPage() {
 							value={poolAsset1}
 							onChange={(e) => setPoolAsset1(e.target.value as AssetKey)}
 						>
-							{assetOptions.filter((a) => a.key !== poolAsset2).map((a) => (
-								<option key={a.key} value={a.key}>
-									{a.label}
-								</option>
-							))}
+							{assetOptions
+								.filter((a) => a.key !== poolAsset2)
+								.map((a) => (
+									<option key={a.key} value={a.key}>
+										{a.label}
+									</option>
+								))}
 						</select>
 					</div>
 					<div>
@@ -572,11 +607,13 @@ export default function DexPage() {
 							value={poolAsset2}
 							onChange={(e) => setPoolAsset2(e.target.value as AssetKey)}
 						>
-							{assetOptions.filter((a) => a.key !== poolAsset1).map((a) => (
-								<option key={a.key} value={a.key}>
-									{a.label}
-								</option>
-							))}
+							{assetOptions
+								.filter((a) => a.key !== poolAsset1)
+								.map((a) => (
+									<option key={a.key} value={a.key}>
+										{a.label}
+									</option>
+								))}
 						</select>
 					</div>
 				</div>
@@ -605,7 +642,11 @@ export default function DexPage() {
 					</div>
 				</div>
 				<div className="mt-4 flex gap-3">
-					<button className="btn-secondary" onClick={createPool} disabled={loading || !!poolReserves}>
+					<button
+						className="btn-secondary"
+						onClick={createPool}
+						disabled={loading || !!poolReserves}
+					>
 						{poolReserves ? "Pool Exists" : "Create Pool"}
 					</button>
 					<button className="btn-primary" onClick={addLiquidity} disabled={loading}>
@@ -616,6 +657,12 @@ export default function DexPage() {
 				<hr className="border-white/[0.06] my-4" />
 
 				<h3 className="text-sm font-semibold font-display mb-3">Remove Liquidity</h3>
+				{lpBalance && (
+					<div className="mb-3 text-xs text-text-secondary">
+						Your LP tokens:{" "}
+						<span className="font-mono text-text-primary">{lpBalance}</span>
+					</div>
+				)}
 				<div>
 					<label className="block text-xs font-medium text-text-secondary mb-1">
 						LP Tokens to Burn

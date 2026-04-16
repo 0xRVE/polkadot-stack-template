@@ -449,6 +449,11 @@ impl pallet_revive::Config for Runtime {
 	type Precompiles = (
 		pallet_asset_conversion_precompiles::AssetConversion<0x0420, Self>,
 		pallet_assets_precompiles::ERC20<Self, pallet_assets_precompiles::InlineIdConfig<0x0120>>,
+		pallet_assets_precompiles::ERC20<
+			Self,
+			pallet_assets_precompiles::InlineIdConfig<0x0220>,
+			pallet_assets::Instance2,
+		>,
 	);
 	type AddressMapper = pallet_revive::AccountId32Mapper<Self>;
 	type RuntimeMemory = ConstU32<{ 128 * 1024 * 1024 }>;
