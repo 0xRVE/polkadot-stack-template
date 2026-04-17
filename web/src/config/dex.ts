@@ -106,4 +106,8 @@ export const ASSETS = {
 	native: { label: "Native", encoded: "0x00" as const },
 	testA: { label: "TSTA (id=1)", encoded: "0x0101000000" as const },
 	testB: { label: "TSTB (id=2)", encoded: "0x0102000000" as const },
+	testC: { label: "TSTC (id=3)", encoded: "0x0103000000" as const },
+	testX: { label: "TSTX (id=4)", encoded: "0x0104000000" as const },
+	testY: { label: "TSTY (id=5)", encoded: "0x0105000000" as const },
+	testZ: { label: "TSTZ (id=6)", encoded: "0x0106000000" as const },
 } as const;

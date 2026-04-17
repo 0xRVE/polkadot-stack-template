@@ -10,12 +10,20 @@ const assetOptions: { key: AssetKey; label: string }[] = [
 	{ key: "native", label: ASSETS.native.label },
 	{ key: "testA", label: ASSETS.testA.label },
 	{ key: "testB", label: ASSETS.testB.label },
+	{ key: "testC", label: ASSETS.testC.label },
+	{ key: "testX", label: ASSETS.testX.label },
+	{ key: "testY", label: ASSETS.testY.label },
+	{ key: "testZ", label: ASSETS.testZ.label },
 ];
 
 // ERC20 precompile addresses for pallet-assets tokens (InlineIdConfig<0x0120>)
 const ERC20_ADDRESSES: Partial<Record<AssetKey, Hex>> = {
 	testA: "0x0000000100000000000000000000000001200000",
 	testB: "0x0000000200000000000000000000000001200000",
+	testC: "0x0000000300000000000000000000000001200000",
+	testX: "0x0000000400000000000000000000000001200000",
+	testY: "0x0000000500000000000000000000000001200000",
+	testZ: "0x0000000600000000000000000000000001200000",
 };
 
 const erc20BalanceAbi = parseAbi([
@@ -123,6 +131,10 @@ export default function DexPage() {
 		native: "-",
 		testA: "-",
 		testB: "-",
+		testC: "-",
+		testX: "-",
+		testY: "-",
+		testZ: "-",
 	});
 
 	// Swap state — path supports multi-hop (e.g. native → testA → testB)
@@ -257,10 +269,14 @@ export default function DexPage() {
 				native: native.toString(),
 				testA: "-",
 				testB: "-",
+				testC: "-",
+				testX: "-",
+				testY: "-",
+				testZ: "-",
 			};
 
 			// ERC20 balances
-			for (const key of ["testA", "testB"] as const) {
+			for (const key of ["testA", "testB", "testC", "testX", "testY", "testZ"] as const) {
 				const erc20 = ERC20_ADDRESSES[key];
 				if (!erc20) continue;
 				try {
