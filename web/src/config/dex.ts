@@ -56,6 +56,19 @@ export const assetConversionAbi = [
 	},
 	{
 		type: "function",
+		name: "getReserves",
+		inputs: [
+			{ name: "asset1", type: "bytes" },
+			{ name: "asset2", type: "bytes" },
+		],
+		outputs: [
+			{ name: "reserve1", type: "uint256" },
+			{ name: "reserve2", type: "uint256" },
+		],
+		stateMutability: "view",
+	},
+	{
+		type: "function",
 		name: "createPool",
 		inputs: [
 			{ name: "asset1", type: "bytes" },
