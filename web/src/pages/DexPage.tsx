@@ -545,29 +545,24 @@ export default function DexPage() {
 				<div className="mt-3 grid grid-cols-3 gap-2">
 					{assetOptions.map((a) => {
 						const raw = balances[a.key];
-						if (a.key === "native" && raw !== "-") {
-							const big = BigInt(raw);
-							const onChain = big / ETH_RATIO;
+						if (raw === "-") {
 							return (
-								<div
-									key={a.key}
-									className="rounded-lg border border-white/[0.08] bg-white/[0.04] px-3 py-2"
-								>
+								<div key={a.key} className="rounded-lg border border-white/[0.08] bg-white/[0.04] px-3 py-2">
 									<div className="text-xs text-text-secondary">{a.label}</div>
-									<div className="text-sm font-mono mt-0.5 truncate">{raw}</div>
-									<div className="text-[10px] font-mono text-text-secondary truncate">
-										{onChain.toString()} on-chain units
-									</div>
+									<div className="text-sm font-mono mt-0.5">-</div>
 								</div>
 							);
 						}
+						const total = BigInt(raw);
+						const ed = ASSETS[a.key].ed * (a.key === "native" ? ETH_RATIO : 1n);
+						const free = total > ed ? total - ed : 0n;
 						return (
-							<div
-								key={a.key}
-								className="rounded-lg border border-white/[0.08] bg-white/[0.04] px-3 py-2"
-							>
+							<div key={a.key} className="rounded-lg border border-white/[0.08] bg-white/[0.04] px-3 py-2">
 								<div className="text-xs text-text-secondary">{a.label}</div>
-								<div className="text-sm font-mono mt-0.5 truncate">{raw}</div>
+								<div className="text-sm font-mono mt-0.5 truncate">{free.toString()}</div>
+								<div className="text-[10px] font-mono text-text-secondary truncate">
+									{ed > 0n && `${ed.toString()} locked (ED)`}
+								</div>
 							</div>
 						);
 					})}
