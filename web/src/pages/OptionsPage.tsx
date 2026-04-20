@@ -110,8 +110,12 @@ export default function OptionsPage() {
 	// Contract address — set by deploy script or manually
 	const contractAddress = deployments.coveredCall ?? "";
 
-	// Current block number (auto-updated)
+	// Current block number + timestamp (auto-updated)
 	const [currentBlock, setCurrentBlock] = useState<bigint | null>(null);
+	const [blockTimestamp, setBlockTimestamp] = useState<bigint | null>(null);
+
+	// Debug mode
+	const [debug, setDebug] = useState(false);
 
 	// Write option form
 	const [underlying, setUnderlying] = useState<AssetKey>("testA");
@@ -186,7 +190,10 @@ export default function OptionsPage() {
 		if (!connected) return;
 		const poll = async () => {
 			try {
-				setCurrentBlock(await getPublicClient(ethRpcUrl).getBlockNumber());
+				const pub_ = getPublicClient(ethRpcUrl);
+				const block = await pub_.getBlock();
+				setCurrentBlock(block.number);
+				setBlockTimestamp(block.timestamp);
 			} catch {
 				/* ignore */
 			}
@@ -395,8 +402,22 @@ export default function OptionsPage() {
 						<span className="font-mono text-text-primary">
 							{currentBlock.toString()}
 						</span>
+						{debug && blockTimestamp !== null && (
+							<span className="ml-2">
+								| Timestamp:{" "}
+								<span className="font-mono text-text-primary">
+									{blockTimestamp.toString()}s
+								</span>
+							</span>
+						)}
 					</div>
 				)}
+				<button
+					className="mt-2 text-[10px] text-text-secondary hover:text-text-primary transition-colors"
+					onClick={() => setDebug((d) => !d)}
+				>
+					{debug ? "Hide" : "Show"} debug info
+				</button>
 				{!contractAddress && (
 					<div className="mt-2 rounded-lg border border-red-500/20 bg-red-500/[0.06] px-3 py-2 text-xs text-red-300">
 						No CoveredCall contract deployed. Run: cd contracts/pvm-rust/e2e && npm run
@@ -551,6 +572,11 @@ export default function OptionsPage() {
 									Amount: {opt.amount.toString()} | Strike:{" "}
 									{opt.strikePrice.toString()} | Expires:{" "}
 									{new Date(Number(opt.expiry) * 1000).toLocaleString()}
+									{debug && (
+										<span className="ml-1 text-yellow-400/70">
+											({opt.expiry.toString()}s)
+										</span>
+									)}
 								</div>
 								<div className="text-[10px] font-mono text-text-secondary mt-1">
 									Seller: {opt.seller}
