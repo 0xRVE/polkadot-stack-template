@@ -63,3 +63,7 @@ Option 1 is used in this project.
 - added pallet-assets instance for PoolAssets
 - added multihop swap
 - empty pool is treated as non-existent pool by asset-conversion (bad UX imho): https://github.com/paritytech/polkadot-sdk/pull/11798
+
+## 17-04-2026
+- added some more TST tokens
+- sending out full balance throws Token(NotExpendable) which is misleading.

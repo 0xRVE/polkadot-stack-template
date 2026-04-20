@@ -29,6 +29,10 @@ pub fn template_session_keys(keys: AuraId) -> SessionKeys {
 /// Test asset IDs for the DEX.
 pub const TEST_ASSET_A: u32 = 1;
 pub const TEST_ASSET_B: u32 = 2;
+pub const TEST_ASSET_C: u32 = 3;
+pub const TEST_ASSET_X: u32 = 4;
+pub const TEST_ASSET_Y: u32 = 5;
+pub const TEST_ASSET_Z: u32 = 6;
 
 fn testnet_genesis(
 	invulnerables: Vec<(AccountId, AuraId)>,
@@ -63,16 +67,31 @@ fn testnet_genesis(
 			assets: vec![
 				(TEST_ASSET_A, alice.clone(), true, 1),
 				(TEST_ASSET_B, alice.clone(), true, 1),
+				(TEST_ASSET_C, alice.clone(), true, 1),
+				(TEST_ASSET_X, alice.clone(), true, 1),
+				(TEST_ASSET_Y, alice.clone(), true, 1),
+				(TEST_ASSET_Z, alice.clone(), true, 1),
 			],
 			metadata: vec![
 				(TEST_ASSET_A, b"Test Token A".to_vec(), b"TSTA".to_vec(), 12),
 				(TEST_ASSET_B, b"Test Token B".to_vec(), b"TSTB".to_vec(), 12),
+				(TEST_ASSET_C, b"Test Token C".to_vec(), b"TSTC".to_vec(), 12),
+				(TEST_ASSET_X, b"Test Token X".to_vec(), b"TSTX".to_vec(), 12),
+				(TEST_ASSET_Y, b"Test Token Y".to_vec(), b"TSTY".to_vec(), 12),
+				(TEST_ASSET_Z, b"Test Token Z".to_vec(), b"TSTZ".to_vec(), 12),
 			],
 			accounts: endowed_accounts
 				.iter()
 				.cloned()
 				.flat_map(|acc| {
-					vec![(TEST_ASSET_A, acc.clone(), 1u128 << 60), (TEST_ASSET_B, acc, 1u128 << 60)]
+					vec![
+						(TEST_ASSET_A, acc.clone(), 1u128 << 60),
+						(TEST_ASSET_B, acc.clone(), 1u128 << 60),
+						(TEST_ASSET_C, acc.clone(), 1_000_000_000_000_000),
+						(TEST_ASSET_X, acc.clone(), 1_000_000_000_000_000),
+						(TEST_ASSET_Y, acc.clone(), 1_000_000_000_000_000),
+						(TEST_ASSET_Z, acc, 1_000_000_000_000_000),
+					]
 				})
 				.collect(),
 		},

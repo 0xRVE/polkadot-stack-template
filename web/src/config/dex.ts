@@ -56,6 +56,19 @@ export const assetConversionAbi = [
 	},
 	{
 		type: "function",
+		name: "getReserves",
+		inputs: [
+			{ name: "asset1", type: "bytes" },
+			{ name: "asset2", type: "bytes" },
+		],
+		outputs: [
+			{ name: "reserve1", type: "uint256" },
+			{ name: "reserve2", type: "uint256" },
+		],
+		stateMutability: "view",
+	},
+	{
+		type: "function",
 		name: "createPool",
 		inputs: [
 			{ name: "asset1", type: "bytes" },
@@ -103,7 +116,11 @@ export const assetConversionAbi = [
 // NativeOrWithId::WithId(1) = enum variant 1, little-endian u32 = 0x01 01000000
 // NativeOrWithId::WithId(2) = enum variant 1, little-endian u32 = 0x01 02000000
 export const ASSETS = {
-	native: { label: "Native", encoded: "0x00" as const },
-	testA: { label: "TSTA (id=1)", encoded: "0x0101000000" as const },
-	testB: { label: "TSTB (id=2)", encoded: "0x0102000000" as const },
+	native: { label: "Native", encoded: "0x00" as const, ed: 1_000_000_000n },
+	testA: { label: "TSTA (id=1)", encoded: "0x0101000000" as const, ed: 1n },
+	testB: { label: "TSTB (id=2)", encoded: "0x0102000000" as const, ed: 1n },
+	testC: { label: "TSTC (id=3)", encoded: "0x0103000000" as const, ed: 1n },
+	testX: { label: "TSTX (id=4)", encoded: "0x0104000000" as const, ed: 1n },
+	testY: { label: "TSTY (id=5)", encoded: "0x0105000000" as const, ed: 1n },
+	testZ: { label: "TSTZ (id=6)", encoded: "0x0106000000" as const, ed: 1n },
 } as const;

@@ -10,12 +10,20 @@ const assetOptions: { key: AssetKey; label: string }[] = [
 	{ key: "native", label: ASSETS.native.label },
 	{ key: "testA", label: ASSETS.testA.label },
 	{ key: "testB", label: ASSETS.testB.label },
+	{ key: "testC", label: ASSETS.testC.label },
+	{ key: "testX", label: ASSETS.testX.label },
+	{ key: "testY", label: ASSETS.testY.label },
+	{ key: "testZ", label: ASSETS.testZ.label },
 ];
 
 // ERC20 precompile addresses for pallet-assets tokens (InlineIdConfig<0x0120>)
 const ERC20_ADDRESSES: Partial<Record<AssetKey, Hex>> = {
 	testA: "0x0000000100000000000000000000000001200000",
 	testB: "0x0000000200000000000000000000000001200000",
+	testC: "0x0000000300000000000000000000000001200000",
+	testX: "0x0000000400000000000000000000000001200000",
+	testY: "0x0000000500000000000000000000000001200000",
+	testZ: "0x0000000600000000000000000000000001200000",
 };
 
 const erc20BalanceAbi = parseAbi([
@@ -123,6 +131,10 @@ export default function DexPage() {
 		native: "-",
 		testA: "-",
 		testB: "-",
+		testC: "-",
+		testX: "-",
+		testY: "-",
+		testZ: "-",
 	});
 
 	// Swap state — path supports multi-hop (e.g. native → testA → testB)
@@ -165,6 +177,8 @@ export default function DexPage() {
 
 	// Pool info
 	const [poolReserves, setPoolReserves] = useState<{
+		reserve1: bigint;
+		reserve2: bigint;
 		rate1to2: string;
 		rate2to1: string;
 	} | null>(null);
@@ -257,10 +271,14 @@ export default function DexPage() {
 				native: native.toString(),
 				testA: "-",
 				testB: "-",
+				testC: "-",
+				testX: "-",
+				testY: "-",
+				testZ: "-",
 			};
 
 			// ERC20 balances
-			for (const key of ["testA", "testB"] as const) {
+			for (const key of ["testA", "testB", "testC", "testX", "testY", "testZ"] as const) {
 				const erc20 = ERC20_ADDRESSES[key];
 				if (!erc20) continue;
 				try {
@@ -292,7 +310,7 @@ export default function DexPage() {
 		const pub_ = getPublicClient(ethRpcUrl);
 		const probeAmount = 1_000_000_000_000n; // 1e12
 		try {
-			const [fwd, rev] = await Promise.all([
+			const [fwd, rev, reserves] = await Promise.all([
 				pub_
 					.readContract({
 						address: ASSET_CONVERSION_PRECOMPILE_ADDRESS,
@@ -317,11 +335,22 @@ export default function DexPage() {
 							probeAmount,
 							true,
 						],
+					})
+					.catch(() => null),
+				pub_
+					.readContract({
+						address: ASSET_CONVERSION_PRECOMPILE_ADDRESS,
+						abi: assetConversionAbi,
+						functionName: "getReserves",
+						args: [ASSETS[poolAsset1].encoded, ASSETS[poolAsset2].encoded],
 					})
 					.catch(() => null),
 			]);
-			if (fwd !== null && rev !== null) {
+			if (fwd !== null && rev !== null && reserves !== null) {
+				const [reserve1, reserve2] = reserves as [bigint, bigint];
 				setPoolReserves({
+					reserve1,
+					reserve2,
 					rate1to2: `${probeAmount} ${ASSETS[poolAsset1].label} = ${fwd} ${ASSETS[poolAsset2].label}`,
 					rate2to1: `${probeAmount} ${ASSETS[poolAsset2].label} = ${rev} ${ASSETS[poolAsset1].label}`,
 				});
@@ -529,29 +558,32 @@ export default function DexPage() {
 				<div className="mt-3 grid grid-cols-3 gap-2">
 					{assetOptions.map((a) => {
 						const raw = balances[a.key];
-						if (a.key === "native" && raw !== "-") {
-							const big = BigInt(raw);
-							const onChain = big / ETH_RATIO;
+						if (raw === "-") {
 							return (
 								<div
 									key={a.key}
 									className="rounded-lg border border-white/[0.08] bg-white/[0.04] px-3 py-2"
 								>
 									<div className="text-xs text-text-secondary">{a.label}</div>
-									<div className="text-sm font-mono mt-0.5 truncate">{raw}</div>
-									<div className="text-[10px] font-mono text-text-secondary truncate">
-										{onChain.toString()} on-chain units
-									</div>
+									<div className="text-sm font-mono mt-0.5">-</div>
 								</div>
 							);
 						}
+						const total = BigInt(raw);
+						const ed = ASSETS[a.key].ed * (a.key === "native" ? ETH_RATIO : 1n);
+						const free = total > ed ? total - ed : 0n;
 						return (
 							<div
 								key={a.key}
 								className="rounded-lg border border-white/[0.08] bg-white/[0.04] px-3 py-2"
 							>
 								<div className="text-xs text-text-secondary">{a.label}</div>
-								<div className="text-sm font-mono mt-0.5 truncate">{raw}</div>
+								<div className="text-sm font-mono mt-0.5 truncate">
+									{free.toString()}
+								</div>
+								<div className="text-[10px] font-mono text-text-secondary truncate">
+									{ed > 0n && `${ed.toString()} locked (ED)`}
+								</div>
 							</div>
 						);
 					})}
@@ -649,13 +681,73 @@ export default function DexPage() {
 				<h2 className="text-lg font-semibold font-display mb-4">Pool Management</h2>
 
 				{poolReserves ? (
-					<div className="mb-4 rounded-lg border border-blue-500/20 bg-blue-500/[0.06] px-4 py-3 text-sm">
-						<div className="text-xs font-medium text-text-secondary mb-1">
-							Pool Rates
-						</div>
-						<div className="font-mono text-xs">{poolReserves.rate1to2}</div>
-						<div className="font-mono text-xs">{poolReserves.rate2to1}</div>
-					</div>
+					(() => {
+						const total = poolReserves.reserve1 + poolReserves.reserve2;
+						const pct1 =
+							total > 0n
+								? Number((poolReserves.reserve1 * 10000n) / total) / 100
+								: 50;
+						const pct2 =
+							total > 0n
+								? Number((poolReserves.reserve2 * 10000n) / total) / 100
+								: 50;
+						return (
+							<div className="mb-4 rounded-lg border border-blue-500/20 bg-blue-500/[0.06] px-4 py-3 text-sm">
+								<div className="text-xs font-medium text-text-secondary mb-2">
+									Pool Reserves
+								</div>
+								{/* Reserve numbers */}
+								<div className="flex justify-between mb-2">
+									<div>
+										<span className="text-xs text-text-secondary">
+											{ASSETS[poolAsset1].label}
+										</span>
+										<div className="font-mono text-sm text-emerald-400">
+											{poolReserves.reserve1.toLocaleString()}
+										</div>
+									</div>
+									<div className="text-right">
+										<span className="text-xs text-text-secondary">
+											{ASSETS[poolAsset2].label}
+										</span>
+										<div className="font-mono text-sm text-rose-400">
+											{poolReserves.reserve2.toLocaleString()}
+										</div>
+									</div>
+								</div>
+								{/* Proportion bar */}
+								<div className="flex h-3 rounded-full overflow-hidden border border-white/[0.08]">
+									<div
+										className="bg-emerald-500 transition-all duration-500"
+										style={{ width: `${pct1}%` }}
+										title={`${ASSETS[poolAsset1].label}: ${pct1.toFixed(1)}%`}
+									/>
+									<div
+										className="bg-rose-500 transition-all duration-500"
+										style={{ width: `${pct2}%` }}
+										title={`${ASSETS[poolAsset2].label}: ${pct2.toFixed(1)}%`}
+									/>
+								</div>
+								<div className="flex justify-between mt-1">
+									<span className="text-[10px] font-mono text-emerald-400/70">
+										{pct1.toFixed(1)}%
+									</span>
+									<span className="text-[10px] font-mono text-rose-400/70">
+										{pct2.toFixed(1)}%
+									</span>
+								</div>
+								{/* Rates */}
+								<div className="mt-2 pt-2 border-t border-white/[0.06]">
+									<div className="font-mono text-xs text-text-secondary">
+										{poolReserves.rate1to2}
+									</div>
+									<div className="font-mono text-xs text-text-secondary">
+										{poolReserves.rate2to1}
+									</div>
+								</div>
+							</div>
+						);
+					})()
 				) : (
 					<div className="mb-4 rounded-lg border border-white/[0.08] bg-white/[0.04] px-4 py-3 text-xs text-text-secondary">
 						No pool found for selected pair
