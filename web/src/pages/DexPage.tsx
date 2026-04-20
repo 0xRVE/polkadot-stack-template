@@ -342,10 +342,7 @@ export default function DexPage() {
 						address: ASSET_CONVERSION_PRECOMPILE_ADDRESS,
 						abi: assetConversionAbi,
 						functionName: "getReserves",
-						args: [
-							ASSETS[poolAsset1].encoded,
-							ASSETS[poolAsset2].encoded,
-						],
+						args: [ASSETS[poolAsset1].encoded, ASSETS[poolAsset2].encoded],
 					})
 					.catch(() => null),
 			]);
@@ -563,7 +560,10 @@ export default function DexPage() {
 						const raw = balances[a.key];
 						if (raw === "-") {
 							return (
-								<div key={a.key} className="rounded-lg border border-white/[0.08] bg-white/[0.04] px-3 py-2">
+								<div
+									key={a.key}
+									className="rounded-lg border border-white/[0.08] bg-white/[0.04] px-3 py-2"
+								>
 									<div className="text-xs text-text-secondary">{a.label}</div>
 									<div className="text-sm font-mono mt-0.5">-</div>
 								</div>
@@ -573,9 +573,14 @@ export default function DexPage() {
 						const ed = ASSETS[a.key].ed * (a.key === "native" ? ETH_RATIO : 1n);
 						const free = total > ed ? total - ed : 0n;
 						return (
-							<div key={a.key} className="rounded-lg border border-white/[0.08] bg-white/[0.04] px-3 py-2">
+							<div
+								key={a.key}
+								className="rounded-lg border border-white/[0.08] bg-white/[0.04] px-3 py-2"
+							>
 								<div className="text-xs text-text-secondary">{a.label}</div>
-								<div className="text-sm font-mono mt-0.5 truncate">{free.toString()}</div>
+								<div className="text-sm font-mono mt-0.5 truncate">
+									{free.toString()}
+								</div>
 								<div className="text-[10px] font-mono text-text-secondary truncate">
 									{ed > 0n && `${ed.toString()} locked (ED)`}
 								</div>
@@ -675,51 +680,75 @@ export default function DexPage() {
 			<div className="card">
 				<h2 className="text-lg font-semibold font-display mb-4">Pool Management</h2>
 
-				{poolReserves ? (() => {
-					const total = poolReserves.reserve1 + poolReserves.reserve2;
-					const pct1 = total > 0n ? Number((poolReserves.reserve1 * 10000n) / total) / 100 : 50;
-					const pct2 = total > 0n ? Number((poolReserves.reserve2 * 10000n) / total) / 100 : 50;
-					return (
-						<div className="mb-4 rounded-lg border border-blue-500/20 bg-blue-500/[0.06] px-4 py-3 text-sm">
-							<div className="text-xs font-medium text-text-secondary mb-2">
-								Pool Reserves
-							</div>
-							{/* Reserve numbers */}
-							<div className="flex justify-between mb-2">
-								<div>
-									<span className="text-xs text-text-secondary">{ASSETS[poolAsset1].label}</span>
-									<div className="font-mono text-sm text-emerald-400">{poolReserves.reserve1.toLocaleString()}</div>
+				{poolReserves ? (
+					(() => {
+						const total = poolReserves.reserve1 + poolReserves.reserve2;
+						const pct1 =
+							total > 0n
+								? Number((poolReserves.reserve1 * 10000n) / total) / 100
+								: 50;
+						const pct2 =
+							total > 0n
+								? Number((poolReserves.reserve2 * 10000n) / total) / 100
+								: 50;
+						return (
+							<div className="mb-4 rounded-lg border border-blue-500/20 bg-blue-500/[0.06] px-4 py-3 text-sm">
+								<div className="text-xs font-medium text-text-secondary mb-2">
+									Pool Reserves
 								</div>
-								<div className="text-right">
-									<span className="text-xs text-text-secondary">{ASSETS[poolAsset2].label}</span>
-									<div className="font-mono text-sm text-rose-400">{poolReserves.reserve2.toLocaleString()}</div>
+								{/* Reserve numbers */}
+								<div className="flex justify-between mb-2">
+									<div>
+										<span className="text-xs text-text-secondary">
+											{ASSETS[poolAsset1].label}
+										</span>
+										<div className="font-mono text-sm text-emerald-400">
+											{poolReserves.reserve1.toLocaleString()}
+										</div>
+									</div>
+									<div className="text-right">
+										<span className="text-xs text-text-secondary">
+											{ASSETS[poolAsset2].label}
+										</span>
+										<div className="font-mono text-sm text-rose-400">
+											{poolReserves.reserve2.toLocaleString()}
+										</div>
+									</div>
+								</div>
+								{/* Proportion bar */}
+								<div className="flex h-3 rounded-full overflow-hidden border border-white/[0.08]">
+									<div
+										className="bg-emerald-500 transition-all duration-500"
+										style={{ width: `${pct1}%` }}
+										title={`${ASSETS[poolAsset1].label}: ${pct1.toFixed(1)}%`}
+									/>
+									<div
+										className="bg-rose-500 transition-all duration-500"
+										style={{ width: `${pct2}%` }}
+										title={`${ASSETS[poolAsset2].label}: ${pct2.toFixed(1)}%`}
+									/>
+								</div>
+								<div className="flex justify-between mt-1">
+									<span className="text-[10px] font-mono text-emerald-400/70">
+										{pct1.toFixed(1)}%
+									</span>
+									<span className="text-[10px] font-mono text-rose-400/70">
+										{pct2.toFixed(1)}%
+									</span>
+								</div>
+								{/* Rates */}
+								<div className="mt-2 pt-2 border-t border-white/[0.06]">
+									<div className="font-mono text-xs text-text-secondary">
+										{poolReserves.rate1to2}
+									</div>
+									<div className="font-mono text-xs text-text-secondary">
+										{poolReserves.rate2to1}
+									</div>
 								</div>
 							</div>
-							{/* Proportion bar */}
-							<div className="flex h-3 rounded-full overflow-hidden border border-white/[0.08]">
-								<div
-									className="bg-emerald-500 transition-all duration-500"
-									style={{ width: `${pct1}%` }}
-									title={`${ASSETS[poolAsset1].label}: ${pct1.toFixed(1)}%`}
-								/>
-								<div
-									className="bg-rose-500 transition-all duration-500"
-									style={{ width: `${pct2}%` }}
-									title={`${ASSETS[poolAsset2].label}: ${pct2.toFixed(1)}%`}
-								/>
-							</div>
-							<div className="flex justify-between mt-1">
-								<span className="text-[10px] font-mono text-emerald-400/70">{pct1.toFixed(1)}%</span>
-								<span className="text-[10px] font-mono text-rose-400/70">{pct2.toFixed(1)}%</span>
-							</div>
-							{/* Rates */}
-							<div className="mt-2 pt-2 border-t border-white/[0.06]">
-								<div className="font-mono text-xs text-text-secondary">{poolReserves.rate1to2}</div>
-								<div className="font-mono text-xs text-text-secondary">{poolReserves.rate2to1}</div>
-							</div>
-						</div>
-					);
-				})() : (
+						);
+					})()
+				) : (
 					<div className="mb-4 rounded-lg border border-white/[0.08] bg-white/[0.04] px-4 py-3 text-xs text-text-secondary">
 						No pool found for selected pair
 					</div>
