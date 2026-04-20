@@ -1,4 +1,4 @@
-name: CI — E2E DEX Router
+name: CI — E2E PVM Contracts
 
 on:
   push:
@@ -10,7 +10,7 @@ on:
 
 
 concurrency:
-  group: ci-e2e-dex-${{ github.ref }}
+  group: ci-e2e-pvm-${{ github.ref }}
   cancel-in-progress: true
 
 env:
@@ -19,7 +19,7 @@ env:
 
 jobs:
   e2e:
-    name: DEX Router E2E
+    name: PVM Contracts E2E
     runs-on: ubuntu-latest
     timeout-minutes: 45
 
@@ -50,8 +50,8 @@ jobs:
       - name: Build runtime
         run: cargo build -p stack-template-runtime --release
 
-      # -- Build PVM contract --
-      - name: Build DexRouter PVM contract
+      # -- Build PVM contracts --
+      - name: Build PVM contracts (DexRouter + CoveredCall)
         working-directory: contracts/pvm-rust
         run: RUSTUP_TOOLCHAIN=nightly cargo build --release
 
@@ -142,7 +142,7 @@ jobs:
         working-directory: contracts/pvm-rust/e2e
         run: npm ci
 
-      - name: Run DexRouter e2e tests
+      - name: Run PVM contract e2e tests (DexRouter + CoveredCall)
         working-directory: contracts/pvm-rust/e2e
         run: npm test
 
