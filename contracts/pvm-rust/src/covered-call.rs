@@ -43,6 +43,7 @@ mod covered_call {
 	const TAG_STRIKE_PRICE: u8 = 0x04;
 	const TAG_EXPIRY: u8 = 0x05;
 	const TAG_STATUS: u8 = 0x06;
+	const TAG_CREATED: u8 = 0x07;
 
 	const STATUS_ACTIVE: u8 = 0;
 	const STATUS_EXERCISED: u8 = 1;
@@ -132,6 +133,7 @@ mod covered_call {
 		storage_set_u256(&option_slot(option_id, TAG_AMOUNT), amount);
 		storage_set_u256(&option_slot(option_id, TAG_STRIKE_PRICE), strike_price);
 		storage_set_u256(&option_slot(option_id, TAG_EXPIRY), expiry);
+		storage_set_u256(&option_slot(option_id, TAG_CREATED), current_time);
 		storage_set_u256(&option_slot(option_id, TAG_STATUS), U256::from(STATUS_ACTIVE));
 
 		emit_option_written(option_id, &caller, amount, strike_price, expiry);
@@ -222,6 +224,7 @@ mod covered_call {
 		storage_clear(&option_slot(option_id, TAG_AMOUNT));
 		storage_clear(&option_slot(option_id, TAG_STRIKE_PRICE));
 		storage_clear(&option_slot(option_id, TAG_EXPIRY));
+		storage_clear(&option_slot(option_id, TAG_CREATED));
 		storage_clear(&option_slot(option_id, TAG_STATUS));
 
 		emit_option_expired(option_id, &seller);
@@ -231,13 +234,14 @@ mod covered_call {
 	#[pvm_contract_macros::method]
 	pub fn get_option(
 		option_id: U256,
-	) -> (pvm_contract_types::Address, Bytes, Bytes, U256, U256, U256, U256) {
+	) -> (pvm_contract_types::Address, Bytes, Bytes, U256, U256, U256, U256, U256) {
 		let seller = storage_get_addr(&option_slot(option_id, TAG_SELLER));
 		let underlying_raw = storage_get_raw(&option_slot(option_id, TAG_UNDERLYING));
 		let strike_raw = storage_get_raw(&option_slot(option_id, TAG_STRIKE_ASSET));
 		let amount = storage_get_u256(&option_slot(option_id, TAG_AMOUNT));
 		let strike_price = storage_get_u256(&option_slot(option_id, TAG_STRIKE_PRICE));
 		let expiry = storage_get_u256(&option_slot(option_id, TAG_EXPIRY));
+		let created = storage_get_u256(&option_slot(option_id, TAG_CREATED));
 		let status = storage_get_u256(&option_slot(option_id, TAG_STATUS));
 
 		let u_len = asset_byte_len(&underlying_raw);
@@ -250,6 +254,7 @@ mod covered_call {
 			amount,
 			strike_price,
 			expiry,
+			created,
 			status,
 		)
 	}
@@ -750,7 +755,7 @@ mod tests {
 		let _ =
 			write_option(tsta(), tstb(), U256::from(100u64), U256::from(5u64), U256::from(50u64));
 
-		let (seller, underlying, strike_asset, amount, strike_price, expiry, status) =
+		let (seller, underlying, strike_asset, amount, strike_price, expiry, created, status) =
 			get_option(U256::ZERO);
 		assert_eq!(seller.0, [0xAA; 20]); // Mock caller address.
 		assert_eq!(underlying.0, vec![0x01, 1, 0, 0, 0]);
@@ -758,6 +763,7 @@ mod tests {
 		assert_eq!(amount, U256::from(100u64));
 		assert_eq!(strike_price, U256::from(5u64));
 		assert_eq!(expiry, U256::from(50u64));
+		assert_eq!(created, U256::from(10u64)); // Mock timestamp at setup.
 		assert_eq!(status, U256::ZERO); // Active.
 	}
 }

@@ -1,10 +1,12 @@
 import hre from "hardhat";
 import * as fs from "fs";
 import * as path from "path";
+import { execSync } from "child_process";
 
 const DEPLOYMENTS_JSON = path.resolve(__dirname, "../../../../deployments.json");
 const DEPLOYMENTS_TS = path.resolve(__dirname, "../../../../web/src/config/deployments.ts");
-const PVM_BINARY = path.resolve(__dirname, "../../target/covered-call.release.polkavm");
+const CRATE_DIR = path.resolve(__dirname, "../..");
+const PVM_BINARY = path.resolve(CRATE_DIR, "target/covered-call.release.polkavm");
 
 function updateDeployments(key: string, address: string) {
 	let data: Record<string, string | null> = { evm: null, pvm: null };
@@ -30,12 +32,12 @@ ${entries}
 }
 
 async function main() {
-	if (!fs.existsSync(PVM_BINARY)) {
-		throw new Error(
-			`PVM binary not found at ${PVM_BINARY}.\n` +
-				`Build first: cd contracts/pvm-rust && env -u CARGO RUSTUP_TOOLCHAIN=nightly cargo build --release`,
-		);
-	}
+	console.log("Building CoveredCall (PVM-Rust)...");
+	execSync("cargo build --release --bin covered-call", {
+		cwd: CRATE_DIR,
+		stdio: "inherit",
+		env: { ...process.env, CARGO: undefined, RUSTUP_TOOLCHAIN: "nightly" },
+	});
 
 	console.log("Deploying CoveredCall (PVM-Rust)...");
 

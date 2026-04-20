@@ -46,7 +46,7 @@ interface ICoveredCall {
     /// @param strikeAsset SCALE-encoded asset identifier for the strike token
     /// @param amount Amount of underlying to deposit as collateral
     /// @param strikePrice Price per unit in strike asset terms
-    /// @param expiry Block number at which the option expires
+    /// @param expiry Unix timestamp (seconds) at which the option expires
     /// @return optionId The ID of the newly created option
     function writeOption(
         bytes calldata underlying,
@@ -76,6 +76,7 @@ interface ICoveredCall {
         uint256 amount,
         uint256 strikePrice,
         uint256 expiry,
+        uint256 created,
         uint256 status
     );
 

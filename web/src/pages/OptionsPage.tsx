@@ -21,7 +21,7 @@ const coveredCallAbi = parseAbi([
 	"function writeOption(bytes underlying, bytes strikeAsset, uint256 amount, uint256 strikePrice, uint256 expiry) external returns (uint256)",
 	"function exerciseOption(uint256 optionId) external",
 	"function expireOption(uint256 optionId) external",
-	"function getOption(uint256 optionId) external view returns (address seller, bytes underlying, bytes strikeAsset, uint256 amount, uint256 strikePrice, uint256 expiry, uint256 status)",
+	"function getOption(uint256 optionId) external view returns (address seller, bytes underlying, bytes strikeAsset, uint256 amount, uint256 strikePrice, uint256 expiry, uint256 created, uint256 status)",
 	"function nextOptionId() external view returns (uint256)",
 ]);
 
@@ -59,6 +59,7 @@ type OptionData = {
 	amount: bigint;
 	strikePrice: bigint;
 	expiry: bigint;
+	created: bigint;
 	status: number;
 };
 
@@ -158,8 +159,8 @@ export default function OptionsPage() {
 						functionName: "getOption",
 						args: [BigInt(i)],
 					});
-					const [seller, underlyingBytes, strikeBytes, amt, strike, expiry, stat] =
-						result as [string, string, string, bigint, bigint, bigint, bigint];
+					const [seller, underlyingBytes, strikeBytes, amt, strike, expiry, created, stat] =
+						result as [string, string, string, bigint, bigint, bigint, bigint, bigint];
 					opts.push({
 						id: BigInt(i),
 						seller,
@@ -168,6 +169,7 @@ export default function OptionsPage() {
 						amount: amt,
 						strikePrice: strike,
 						expiry,
+						created,
 						status: Number(stat),
 					});
 				} catch {
@@ -224,9 +226,9 @@ export default function OptionsPage() {
 				await pub_.waitForTransactionReceipt({ hash: approveHash, timeout: 30_000 });
 			}
 
-			// Compute expiry as Unix timestamp (seconds)
-			const nowSec = BigInt(Math.floor(Date.now() / 1000));
-			const expiryTimestamp = nowSec + BigInt(Number(expiryMinutes) * 60);
+			// Compute expiry from the chain's own timestamp (not browser clock)
+			const latestBlock = await pub_.getBlock();
+			const expiryTimestamp = latestBlock.timestamp + BigInt(Number(expiryMinutes) * 60);
 
 			const hash = await wallet.writeContract({
 				address: addr,
@@ -570,7 +572,16 @@ export default function OptionsPage() {
 								</div>
 								<div className="text-xs font-mono text-text-secondary">
 									Amount: {opt.amount.toString()} | Strike:{" "}
-									{opt.strikePrice.toString()} | Expires:{" "}
+									{opt.strikePrice.toString()}
+								</div>
+								<div className="text-xs font-mono text-text-secondary">
+									Created: {new Date(Number(opt.created) * 1000).toLocaleString()}
+									{debug && (
+										<span className="ml-1 text-yellow-400/70">
+											({opt.created.toString()}s)
+										</span>
+									)}
+									{" "}| Expires:{" "}
 									{new Date(Number(opt.expiry) * 1000).toLocaleString()}
 									{debug && (
 										<span className="ml-1 text-yellow-400/70">
