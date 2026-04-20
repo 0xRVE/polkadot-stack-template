@@ -391,12 +391,16 @@ export default function OptionsPage() {
 				</div>
 				{currentBlock !== null && (
 					<div className="mt-2 text-xs text-text-secondary">
-						Block: <span className="font-mono text-text-primary">{currentBlock.toString()}</span>
+						Block:{" "}
+						<span className="font-mono text-text-primary">
+							{currentBlock.toString()}
+						</span>
 					</div>
 				)}
 				{!contractAddress && (
 					<div className="mt-2 rounded-lg border border-red-500/20 bg-red-500/[0.06] px-3 py-2 text-xs text-red-300">
-						No CoveredCall contract deployed. Run: cd contracts/pvm-rust/e2e && npm run deploy:covered-call
+						No CoveredCall contract deployed. Run: cd contracts/pvm-rust/e2e && npm run
+						deploy:covered-call
 					</div>
 				)}
 			</div>
@@ -544,8 +548,9 @@ export default function OptionsPage() {
 									</span>
 								</div>
 								<div className="text-xs font-mono text-text-secondary">
-									Amount: {opt.amount.toString()} | Strike: {opt.strikePrice.toString()}{" "}
-									| Expires: {new Date(Number(opt.expiry) * 1000).toLocaleString()}
+									Amount: {opt.amount.toString()} | Strike:{" "}
+									{opt.strikePrice.toString()} | Expires:{" "}
+									{new Date(Number(opt.expiry) * 1000).toLocaleString()}
 								</div>
 								<div className="text-[10px] font-mono text-text-secondary mt-1">
 									Seller: {opt.seller}
