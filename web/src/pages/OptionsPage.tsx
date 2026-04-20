@@ -110,12 +110,15 @@ export default function OptionsPage() {
 	// Contract address — set by deploy script or manually
 	const contractAddress = deployments.coveredCall ?? "";
 
+	// Current block number (auto-updated)
+	const [currentBlock, setCurrentBlock] = useState<bigint | null>(null);
+
 	// Write option form
 	const [underlying, setUnderlying] = useState<AssetKey>("testA");
 	const [strikeAsset, setStrikeAsset] = useState<AssetKey>("testB");
 	const [amount, setAmount] = useState("1000000000000");
 	const [strikePrice, setStrikePrice] = useState("1");
-	const [expiryBlocks, setExpiryBlocks] = useState("100");
+	const [expiryMinutes, setExpiryMinutes] = useState("10");
 
 	// Options list
 	const [options, setOptions] = useState<OptionData[]>([]);
@@ -179,6 +182,20 @@ export default function OptionsPage() {
 		return () => clearInterval(interval);
 	}, [fetchOptions]);
 
+	useEffect(() => {
+		if (!connected) return;
+		const poll = async () => {
+			try {
+				setCurrentBlock(await getPublicClient(ethRpcUrl).getBlockNumber());
+			} catch {
+				/* ignore */
+			}
+		};
+		poll();
+		const interval = setInterval(poll, 3000);
+		return () => clearInterval(interval);
+	}, [connected, ethRpcUrl]);
+
 	const doWriteOption = async () => {
 		if (!connected || !contractAddress) return report("Not connected or no contract", true);
 		setLoading(true);
@@ -200,9 +217,9 @@ export default function OptionsPage() {
 				await pub_.waitForTransactionReceipt({ hash: approveHash, timeout: 30_000 });
 			}
 
-			// Get current block for expiry calculation
-			const currentBlock = await pub_.getBlockNumber();
-			const expiryBlock = currentBlock + BigInt(expiryBlocks);
+			// Compute expiry as Unix timestamp (seconds)
+			const nowSec = BigInt(Math.floor(Date.now() / 1000));
+			const expiryTimestamp = nowSec + BigInt(Number(expiryMinutes) * 60);
 
 			const hash = await wallet.writeContract({
 				address: addr,
@@ -213,7 +230,7 @@ export default function OptionsPage() {
 					ASSETS[strikeAsset].encoded,
 					BigInt(amount),
 					BigInt(strikePrice),
-					expiryBlock,
+					expiryTimestamp,
 				],
 				gas: 5_000_000n,
 			});
@@ -372,6 +389,11 @@ export default function OptionsPage() {
 				<div className="mt-2 px-1 text-xs font-mono text-text-secondary break-all">
 					{account.address}
 				</div>
+				{currentBlock !== null && (
+					<div className="mt-2 text-xs text-text-secondary">
+						Block: <span className="font-mono text-text-primary">{currentBlock.toString()}</span>
+					</div>
+				)}
 				{!contractAddress && (
 					<div className="mt-2 rounded-lg border border-red-500/20 bg-red-500/[0.06] px-3 py-2 text-xs text-red-300">
 						No CoveredCall contract deployed. Run: cd contracts/pvm-rust/e2e && npm run deploy:covered-call
@@ -445,13 +467,13 @@ export default function OptionsPage() {
 					</div>
 					<div>
 						<label className="block text-xs font-medium text-text-secondary mb-1">
-							Expires in (blocks)
+							Expires in (minutes)
 						</label>
 						<input
 							type="text"
 							className="w-full rounded-lg border border-white/[0.08] bg-white/[0.04] px-3 py-2 text-sm font-mono"
-							value={expiryBlocks}
-							onChange={(e) => setExpiryBlocks(e.target.value)}
+							value={expiryMinutes}
+							onChange={(e) => setExpiryMinutes(e.target.value)}
 						/>
 					</div>
 				</div>
@@ -523,7 +545,7 @@ export default function OptionsPage() {
 								</div>
 								<div className="text-xs font-mono text-text-secondary">
 									Amount: {opt.amount.toString()} | Strike: {opt.strikePrice.toString()}{" "}
-									| Expiry: block {opt.expiry.toString()}
+									| Expires: {new Date(Number(opt.expiry) * 1000).toLocaleString()}
 								</div>
 								<div className="text-[10px] font-mono text-text-secondary mt-1">
 									Seller: {opt.seller}

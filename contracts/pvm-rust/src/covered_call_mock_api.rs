@@ -10,7 +10,7 @@ struct State {
 	event_count: u32,
 	call_count: u32,
 	storage: HashMap<[u8; 32], [u8; 32]>,
-	block_number: [u8; 32],
+	timestamp: [u8; 32],
 }
 
 static STATE: Mutex<Option<State>> = Mutex::new(None);
@@ -25,7 +25,7 @@ fn with_state<R>(f: impl FnOnce(&mut State) -> R) -> R {
 		event_count: 0,
 		call_count: 0,
 		storage: HashMap::new(),
-		block_number: [0u8; 32],
+		timestamp: [0u8; 32],
 	});
 	f(state)
 }
@@ -89,8 +89,8 @@ impl MockApi {
 		with_state(|s| s.event_count += 1);
 	}
 
-	pub fn block_number(output: &mut [u8; 32]) {
-		with_state(|s| output.copy_from_slice(&s.block_number));
+	pub fn now(output: &mut [u8; 32]) {
+		with_state(|s| output.copy_from_slice(&s.timestamp));
 	}
 
 	pub fn get_storage(
@@ -133,10 +133,10 @@ pub fn set_call_should_fail(fail: bool) {
 	with_state(|s| s.call_should_fail = fail);
 }
 
-pub fn set_block_number(block: u64) {
+pub fn set_now(ts: u64) {
 	with_state(|s| {
-		s.block_number = [0u8; 32];
-		s.block_number[0..8].copy_from_slice(&block.to_le_bytes());
+		s.timestamp = [0u8; 32];
+		s.timestamp[0..8].copy_from_slice(&ts.to_le_bytes());
 	});
 }
 
@@ -149,7 +149,7 @@ pub fn reset() {
 		s.event_count = 0;
 		s.call_count = 0;
 		s.storage.clear();
-		s.block_number = [0u8; 32];
+		s.timestamp = [0u8; 32];
 	});
 }
 

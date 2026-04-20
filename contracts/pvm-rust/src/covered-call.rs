@@ -105,8 +105,8 @@ mod covered_call {
 		if amount == U256::ZERO || strike_price == U256::ZERO {
 			return Err(Error::InvalidAmount);
 		}
-		let current_block = block_number();
-		if expiry <= current_block {
+		let current_time = now();
+		if expiry <= current_time {
 			return Err(Error::InvalidExpiry);
 		}
 		if erc20_of(&underlying.0).is_none() {
@@ -123,8 +123,8 @@ mod covered_call {
 		let option_id = storage_get_u256(&SLOT_NEXT_ID);
 		storage_set_u256(&SLOT_NEXT_ID, option_id + U256::from(1));
 
-		// Pull collateral from caller.
-		pull_token(&underlying.0, &caller, &me, amount);
+		// Lock collateral from caller.
+		freeze_token(&underlying.0, &caller, &me, amount);
 
 		// Store option fields.
 		storage_set_addr(&option_slot(option_id, TAG_SELLER), &caller);
@@ -141,7 +141,11 @@ mod covered_call {
 
 	#[pvm_contract_macros::method]
 	pub fn exercise_option(option_id: U256) -> Result<(), Error> {
-		// Check active.
+		// Check option exists and is active.
+		let seller = storage_get_addr(&option_slot(option_id, TAG_SELLER));
+		if seller == [0u8; 20] {
+			return Err(Error::OptionNotActive);
+		}
 		let status = storage_get_u256(&option_slot(option_id, TAG_STATUS));
 		if status != U256::from(STATUS_ACTIVE) {
 			return Err(Error::OptionNotActive);
@@ -149,8 +153,8 @@ mod covered_call {
 
 		// Check not expired.
 		let expiry = storage_get_u256(&option_slot(option_id, TAG_EXPIRY));
-		let current_block = block_number();
-		if current_block >= expiry {
+		let current_time = now();
+		if current_time >= expiry {
 			return Err(Error::OptionAlreadyExpired);
 		}
 
@@ -191,14 +195,19 @@ mod covered_call {
 
 	#[pvm_contract_macros::method]
 	pub fn expire_option(option_id: U256) -> Result<(), Error> {
+		// Check option exists and is active.
+		let seller_check = storage_get_addr(&option_slot(option_id, TAG_SELLER));
+		if seller_check == [0u8; 20] {
+			return Err(Error::OptionNotActive);
+		}
 		let status = storage_get_u256(&option_slot(option_id, TAG_STATUS));
 		if status != U256::from(STATUS_ACTIVE) {
 			return Err(Error::OptionNotActive);
 		}
 
 		let expiry = storage_get_u256(&option_slot(option_id, TAG_EXPIRY));
-		let current_block = block_number();
-		if current_block < expiry {
+		let current_time = now();
+		if current_time < expiry {
 			return Err(Error::OptionNotExpired);
 		}
 
@@ -210,10 +219,14 @@ mod covered_call {
 		// Return collateral to seller.
 		push_token(&underlying_raw[..u_len], &seller, amount);
 
-		storage_set_u256(
-			&option_slot(option_id, TAG_STATUS),
-			U256::from(STATUS_EXPIRED),
-		);
+		// Clear storage — option is fully settled.
+		storage_clear(&option_slot(option_id, TAG_SELLER));
+		storage_clear(&option_slot(option_id, TAG_UNDERLYING));
+		storage_clear(&option_slot(option_id, TAG_STRIKE_ASSET));
+		storage_clear(&option_slot(option_id, TAG_AMOUNT));
+		storage_clear(&option_slot(option_id, TAG_STRIKE_PRICE));
+		storage_clear(&option_slot(option_id, TAG_EXPIRY));
+		storage_clear(&option_slot(option_id, TAG_STATUS));
 
 		emit_option_expired(option_id, &seller);
 		Ok(())
@@ -314,6 +327,10 @@ mod covered_call {
 		api::set_storage(StorageFlags::empty(), key, &buf);
 	}
 
+	fn storage_clear(key: &[u8; 32]) {
+		api::set_storage(StorageFlags::empty(), key, &[]);
+	}
+
 	/// Determine the byte length of a SCALE-encoded NativeOrWithId.
 	fn asset_byte_len(raw: &[u8; 32]) -> usize {
 		match raw[0] {
@@ -323,9 +340,9 @@ mod covered_call {
 		}
 	}
 
-	fn block_number() -> U256 {
+	fn now() -> U256 {
 		let mut buf = [0u8; 32];
-		api::block_number(&mut buf);
+		api::now(&mut buf);
 		U256::from_le_bytes::<32>(buf)
 	}
 
@@ -348,6 +365,13 @@ mod covered_call {
 		if let Some(erc20) = erc20_of(asset) {
 			erc20_call(&erc20, &build_transfer_from(from, to, amount));
 		}
+	}
+
+	/// Lock collateral for an option. Currently pulls tokens into the contract.
+	/// TODO: replace with a freeze precompile call so tokens stay in the
+	/// writer's account (requires a pallet-assets freeze precompile).
+	fn freeze_token(asset: &[u8], from: &[u8; 20], to: &[u8; 20], amount: U256) {
+		pull_token(asset, from, to, amount);
 	}
 
 	fn push_token(asset: &[u8], to: &[u8; 20], amount: U256) {
@@ -580,7 +604,7 @@ mod tests {
 		// Mock DEX quote returns 1000 for any query.
 		mock_api::set_call_output(&U256::from(1000u64).to_be_bytes::<32>());
 		// Set block number to 10.
-		mock_api::set_block_number(10);
+		mock_api::set_now(10);
 	}
 
 	#[test]
@@ -639,7 +663,7 @@ mod tests {
 		let _ = write_option(tsta(), tstb(), U256::from(100u64), U256::from(5u64), U256::from(15u64));
 
 		// Advance block past expiry.
-		mock_api::set_block_number(20);
+		mock_api::set_now(20);
 		mock_api::reset_counts();
 
 		let result = expire_option(U256::ZERO);
@@ -662,7 +686,7 @@ mod tests {
 	fn expire_option_rejects_already_expired() {
 		setup();
 		let _ = write_option(tsta(), tstb(), U256::from(100u64), U256::from(5u64), U256::from(15u64));
-		mock_api::set_block_number(20);
+		mock_api::set_now(20);
 		let _ = expire_option(U256::ZERO);
 
 		// Try again — status is now expired.
@@ -706,7 +730,7 @@ mod tests {
 	fn exercise_option_rejects_after_expiry() {
 		setup();
 		let _ = write_option(tsta(), tstb(), U256::from(100u64), U256::from(5u64), U256::from(15u64));
-		mock_api::set_block_number(20);
+		mock_api::set_now(20);
 
 		let result = exercise_option(U256::ZERO);
 		assert_eq!(result, Err(Error::OptionAlreadyExpired));

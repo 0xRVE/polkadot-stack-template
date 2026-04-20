@@ -2,5 +2,5 @@
 export const deployments: { evm: string | null; pvm: string | null; coveredCall: string | null } = {
 	evm: "0xc01ee7f10ea4af4673cfff62710e1d7792aba8f3",
 	pvm: "0x970951a12f975e6762482aca81e57d5a2a4e73f4",
-	coveredCall: "0x3649e46ecd6a0bd187f0046c4c35a7b31c92ba1e",
+	coveredCall: "0x746dfe0f96789e62ceceea3ca2a9b5556b3aad6c",
 };
