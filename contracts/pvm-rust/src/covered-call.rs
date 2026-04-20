@@ -29,8 +29,7 @@ mod covered_call {
 	// ── Constants ────────────────────────────────────────────────────────
 
 	/// Asset-conversion precompile (ADDRESS = 0x0420).
-	const PRECOMPILE: [u8; 20] =
-		[0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0x04, 0x20, 0, 0];
+	const PRECOMPILE: [u8; 20] = [0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0x04, 0x20, 0, 0];
 
 	/// ERC20 precompile prefix bytes at [16..18] (InlineIdConfig<0x0120>).
 	const ERC20_BYTE16: u8 = 0x01;
@@ -184,10 +183,7 @@ mod covered_call {
 		push_token(&underlying_raw[..u_len], &caller, amount);
 
 		// Mark exercised.
-		storage_set_u256(
-			&option_slot(option_id, TAG_STATUS),
-			U256::from(STATUS_EXERCISED),
-		);
+		storage_set_u256(&option_slot(option_id, TAG_STATUS), U256::from(STATUS_EXERCISED));
 
 		emit_option_exercised(option_id, &caller);
 		Ok(())
@@ -235,15 +231,7 @@ mod covered_call {
 	#[pvm_contract_macros::method]
 	pub fn get_option(
 		option_id: U256,
-	) -> (
-		pvm_contract_types::Address,
-		Bytes,
-		Bytes,
-		U256,
-		U256,
-		U256,
-		U256,
-	) {
+	) -> (pvm_contract_types::Address, Bytes, Bytes, U256, U256, U256, U256) {
 		let seller = storage_get_addr(&option_slot(option_id, TAG_SELLER));
 		let underlying_raw = storage_get_raw(&option_slot(option_id, TAG_UNDERLYING));
 		let strike_raw = storage_get_raw(&option_slot(option_id, TAG_STRIKE_ASSET));
@@ -544,10 +532,7 @@ mod covered_call {
 		expiry: U256,
 	) {
 		let mut sig = [0u8; 32];
-		api::hash_keccak_256(
-			b"OptionWritten(uint256,address,uint256,uint256,uint256)",
-			&mut sig,
-		);
+		api::hash_keccak_256(b"OptionWritten(uint256,address,uint256,uint256,uint256)", &mut sig);
 		let t_id = enc_u256(id);
 		let mut t_seller = [0u8; 32];
 		t_seller[12..32].copy_from_slice(seller);
@@ -581,8 +566,7 @@ mod covered_call {
 
 #[cfg(test)]
 mod tests {
-	use super::covered_call::*;
-	use super::mock_api;
+	use super::{covered_call::*, mock_api};
 	use ruint::aliases::U256;
 
 	fn b(v: Vec<u8>) -> pvm_contract_types::Bytes {
@@ -610,7 +594,8 @@ mod tests {
 	#[test]
 	fn write_option_stores_and_returns_id() {
 		setup();
-		let result = write_option(tsta(), tstb(), U256::from(100u64), U256::from(5u64), U256::from(50u64));
+		let result =
+			write_option(tsta(), tstb(), U256::from(100u64), U256::from(5u64), U256::from(50u64));
 		assert_eq!(result, Ok(U256::ZERO)); // First option = id 0.
 		assert_eq!(next_option_id(), U256::from(1u64));
 		// 1 ERC20 transferFrom to pull collateral.
@@ -621,8 +606,10 @@ mod tests {
 	#[test]
 	fn write_option_increments_counter() {
 		setup();
-		let _ = write_option(tsta(), tstb(), U256::from(100u64), U256::from(5u64), U256::from(50u64));
-		let result = write_option(tstb(), tsta(), U256::from(200u64), U256::from(10u64), U256::from(60u64));
+		let _ =
+			write_option(tsta(), tstb(), U256::from(100u64), U256::from(5u64), U256::from(50u64));
+		let result =
+			write_option(tstb(), tsta(), U256::from(200u64), U256::from(10u64), U256::from(60u64));
 		assert_eq!(result, Ok(U256::from(1u64))); // Second option = id 1.
 		assert_eq!(next_option_id(), U256::from(2u64));
 	}
@@ -637,7 +624,8 @@ mod tests {
 	#[test]
 	fn write_option_rejects_zero_strike() {
 		setup();
-		let result = write_option(tsta(), tstb(), U256::from(100u64), U256::ZERO, U256::from(50u64));
+		let result =
+			write_option(tsta(), tstb(), U256::from(100u64), U256::ZERO, U256::from(50u64));
 		assert_eq!(result, Err(Error::InvalidAmount));
 	}
 
@@ -645,7 +633,8 @@ mod tests {
 	fn write_option_rejects_past_expiry() {
 		setup();
 		// Block is 10, expiry is 5.
-		let result = write_option(tsta(), tstb(), U256::from(100u64), U256::from(5u64), U256::from(5u64));
+		let result =
+			write_option(tsta(), tstb(), U256::from(100u64), U256::from(5u64), U256::from(5u64));
 		assert_eq!(result, Err(Error::InvalidExpiry));
 	}
 
@@ -653,14 +642,16 @@ mod tests {
 	fn write_option_rejects_native_asset() {
 		setup();
 		let native = b(vec![0x00]);
-		let result = write_option(native, tstb(), U256::from(100u64), U256::from(5u64), U256::from(50u64));
+		let result =
+			write_option(native, tstb(), U256::from(100u64), U256::from(5u64), U256::from(50u64));
 		assert_eq!(result, Err(Error::InvalidAsset));
 	}
 
 	#[test]
 	fn expire_option_returns_collateral() {
 		setup();
-		let _ = write_option(tsta(), tstb(), U256::from(100u64), U256::from(5u64), U256::from(15u64));
+		let _ =
+			write_option(tsta(), tstb(), U256::from(100u64), U256::from(5u64), U256::from(15u64));
 
 		// Advance block past expiry.
 		mock_api::set_now(20);
@@ -676,7 +667,8 @@ mod tests {
 	#[test]
 	fn expire_option_rejects_before_expiry() {
 		setup();
-		let _ = write_option(tsta(), tstb(), U256::from(100u64), U256::from(5u64), U256::from(50u64));
+		let _ =
+			write_option(tsta(), tstb(), U256::from(100u64), U256::from(5u64), U256::from(50u64));
 		// Block is still 10, expiry is 50.
 		let result = expire_option(U256::ZERO);
 		assert_eq!(result, Err(Error::OptionNotExpired));
@@ -685,7 +677,8 @@ mod tests {
 	#[test]
 	fn expire_option_rejects_already_expired() {
 		setup();
-		let _ = write_option(tsta(), tstb(), U256::from(100u64), U256::from(5u64), U256::from(15u64));
+		let _ =
+			write_option(tsta(), tstb(), U256::from(100u64), U256::from(5u64), U256::from(15u64));
 		mock_api::set_now(20);
 		let _ = expire_option(U256::ZERO);
 
@@ -699,7 +692,8 @@ mod tests {
 		setup();
 		// Write option: amount=100, strike_price=5, expiry=50.
 		// total_cost = 5 * 100 = 500.
-		let _ = write_option(tsta(), tstb(), U256::from(100u64), U256::from(5u64), U256::from(50u64));
+		let _ =
+			write_option(tsta(), tstb(), U256::from(100u64), U256::from(5u64), U256::from(50u64));
 
 		// Mock DEX quote returns 1000 > total_cost 500 → in the money.
 		mock_api::set_call_output(&U256::from(1000u64).to_be_bytes::<32>());
@@ -716,7 +710,8 @@ mod tests {
 	fn exercise_option_rejects_out_of_the_money() {
 		setup();
 		// Write option: amount=100, strike_price=5. total_cost = 500.
-		let _ = write_option(tsta(), tstb(), U256::from(100u64), U256::from(5u64), U256::from(50u64));
+		let _ =
+			write_option(tsta(), tstb(), U256::from(100u64), U256::from(5u64), U256::from(50u64));
 
 		// Mock DEX quote returns 400 < total_cost 500 → out of the money.
 		mock_api::set_call_output(&U256::from(400u64).to_be_bytes::<32>());
@@ -729,7 +724,8 @@ mod tests {
 	#[test]
 	fn exercise_option_rejects_after_expiry() {
 		setup();
-		let _ = write_option(tsta(), tstb(), U256::from(100u64), U256::from(5u64), U256::from(15u64));
+		let _ =
+			write_option(tsta(), tstb(), U256::from(100u64), U256::from(5u64), U256::from(15u64));
 		mock_api::set_now(20);
 
 		let result = exercise_option(U256::ZERO);
@@ -739,7 +735,8 @@ mod tests {
 	#[test]
 	fn exercise_option_rejects_already_exercised() {
 		setup();
-		let _ = write_option(tsta(), tstb(), U256::from(100u64), U256::from(5u64), U256::from(50u64));
+		let _ =
+			write_option(tsta(), tstb(), U256::from(100u64), U256::from(5u64), U256::from(50u64));
 		mock_api::set_call_output(&U256::from(1000u64).to_be_bytes::<32>());
 		let _ = exercise_option(U256::ZERO);
 
@@ -750,7 +747,8 @@ mod tests {
 	#[test]
 	fn get_option_returns_stored_values() {
 		setup();
-		let _ = write_option(tsta(), tstb(), U256::from(100u64), U256::from(5u64), U256::from(50u64));
+		let _ =
+			write_option(tsta(), tstb(), U256::from(100u64), U256::from(5u64), U256::from(50u64));
 
 		let (seller, underlying, strike_asset, amount, strike_price, expiry, status) =
 			get_option(U256::ZERO);
