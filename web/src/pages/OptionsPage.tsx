@@ -159,8 +159,16 @@ export default function OptionsPage() {
 						functionName: "getOption",
 						args: [BigInt(i)],
 					});
-					const [seller, underlyingBytes, strikeBytes, amt, strike, expiry, created, stat] =
-						result as [string, string, string, bigint, bigint, bigint, bigint, bigint];
+					const [
+						seller,
+						underlyingBytes,
+						strikeBytes,
+						amt,
+						strike,
+						expiry,
+						created,
+						stat,
+					] = result as [string, string, string, bigint, bigint, bigint, bigint, bigint];
 					opts.push({
 						id: BigInt(i),
 						seller,
@@ -580,8 +588,8 @@ export default function OptionsPage() {
 										<span className="ml-1 text-yellow-400/70">
 											({opt.created.toString()}s)
 										</span>
-									)}
-									{" "}| Expires:{" "}
+									)}{" "}
+									| Expires:{" "}
 									{new Date(Number(opt.expiry) * 1000).toLocaleString()}
 									{debug && (
 										<span className="ml-1 text-yellow-400/70">
