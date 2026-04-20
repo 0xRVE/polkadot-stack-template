@@ -136,7 +136,7 @@ pub fn set_call_should_fail(fail: bool) {
 pub fn set_block_number(block: u64) {
 	with_state(|s| {
 		s.block_number = [0u8; 32];
-		s.block_number[24..32].copy_from_slice(&block.to_be_bytes());
+		s.block_number[0..8].copy_from_slice(&block.to_le_bytes());
 	});
 }
 

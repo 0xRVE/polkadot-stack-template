@@ -9,6 +9,7 @@
   },
   "scripts": {
     "test": "npx hardhat test --network local",
+    "deploy:covered-call": "npx hardhat run scripts/deploy-covered-call.ts --network local",
     "fmt": "prettier --write 'test/**/*.ts' hardhat.config.ts",
     "fmt:check": "prettier --check 'test/**/*.ts' hardhat.config.ts"
   },

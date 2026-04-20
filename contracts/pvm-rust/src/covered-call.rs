@@ -326,7 +326,7 @@ mod covered_call {
 	fn block_number() -> U256 {
 		let mut buf = [0u8; 32];
 		api::block_number(&mut buf);
-		U256::from_be_bytes::<32>(buf)
+		U256::from_le_bytes::<32>(buf)
 	}
 
 	// ── DEX quote ────────────────────────────────────────────────────────
