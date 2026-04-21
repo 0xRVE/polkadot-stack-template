@@ -113,6 +113,9 @@ async function sendWithRetry(
 			const hash = await sendFn();
 			console.log(`        📝 ${label} tx hash: ${hash}`);
 			const receipt = await publicClient.waitForTransactionReceipt({ hash, timeout });
+			if (receipt.status === "reverted") {
+				throw new Error(`${label} reverted in block ${receipt.blockNumber}`);
+			}
 			console.log(`        ✅ ${label} confirmed in block ${receipt.blockNumber}`);
 			return receipt;
 		} catch (e: unknown) {
@@ -162,12 +165,54 @@ async function getChainTimestamp(): Promise<bigint> {
 	return block.timestamp;
 }
 
-function isContractError(msg: string): boolean {
-	return (
-		msg.includes("ContractTrapped") ||
-		msg.includes("revert") ||
-		msg.includes("unknown RPC error")
+// Send a contract call that is expected to revert. Handles both cases:
+// 1. viem throws during simulation (eth_call) — caught and verified
+// 2. viem sends tx without throwing — receipt status checked for "reverted"
+async function expectTxReverts(
+	signer: Awaited<ReturnType<typeof hre.viem.getWalletClients>>[number],
+	params: { address: Hex; functionName: string; args: readonly unknown[] },
+	errorName: string,
+): Promise<void> {
+	const publicClient = await hre.viem.getPublicClient();
+	let hash: Hex;
+	try {
+		hash = await signer.writeContract({
+			address: params.address,
+			abi: coveredCallAbi,
+			functionName: params.functionName,
+			args: params.args,
+			gas: 5_000_000n,
+		} as any);
+	} catch (e: unknown) {
+		// writeContract threw during simulation — verify it's the expected error
+		const msg = (e as Error).message;
+		if (msg.includes("execution reverted") && !msg.includes(errorName)) {
+			expect.fail(`reverted with wrong error: expected ${errorName}, got: ${msg.slice(0, 300)}`);
+		}
+		return;
+	}
+	// writeContract didn't throw — check on-chain receipt
+	const receipt = await publicClient.waitForTransactionReceipt({ hash, timeout: 30_000 });
+	expect(receipt.status).to.equal(
+		"reverted",
+		`expected tx to revert (${errorName}) but it succeeded in block ${receipt.blockNumber}`,
 	);
+}
+
+// Same as expectTxReverts but for raw sendTransaction (e.g. unknown selector)
+async function expectRawTxReverts(
+	signer: Awaited<ReturnType<typeof hre.viem.getWalletClients>>[number],
+	params: { to: Hex; data: Hex },
+): Promise<void> {
+	const publicClient = await hre.viem.getPublicClient();
+	let hash: Hex;
+	try {
+		hash = await signer.sendTransaction(params);
+	} catch (e: unknown) {
+		return; // threw during simulation — revert detected
+	}
+	const receipt = await publicClient.waitForTransactionReceipt({ hash, timeout: 30_000 });
+	expect(receipt.status).to.equal("reverted", `expected tx to revert but it succeeded`);
 }
 
 function evmToSubstrateAccount(evmAddress: Hex): string {
@@ -183,14 +228,21 @@ function sendAndWait(
 	signer: ReturnType<Keyring["addFromUri"]>,
 ): Promise<void> {
 	return new Promise<void>((resolve, reject) => {
-		const timer = setTimeout(() => reject(new Error("sendAndWait timed out after 60s")), 60_000);
+		const timer = setTimeout(
+			() => reject(new Error("sendAndWait timed out after 60s")),
+			60_000,
+		);
 		tx.signAndSend(signer, ({ status, dispatchError, events }) => {
 			console.log(`        📦 tx status: ${status.type}`);
 			if (dispatchError) {
 				clearTimeout(timer);
 				if (dispatchError.isModule) {
 					const decoded = dispatchError.registry.findMetaError(dispatchError.asModule);
-					reject(new Error(`${decoded.section}.${decoded.method}: ${decoded.docs.join(" ")}`));
+					reject(
+						new Error(
+							`${decoded.section}.${decoded.method}: ${decoded.docs.join(" ")}`,
+						),
+					);
 				} else {
 					reject(new Error(dispatchError.toString()));
 				}
@@ -199,7 +251,11 @@ function sendAndWait(
 				// Check for dispatch errors in events
 				for (const { event } of events || []) {
 					if (event.section === "system" && event.method === "ExtrinsicFailed") {
-						reject(new Error(`ExtrinsicFailed in block ${status.isInBlock ? status.asInBlock.toHex() : "finalized"}`));
+						reject(
+							new Error(
+								`ExtrinsicFailed in block ${status.isInBlock ? status.asInBlock.toHex() : "finalized"}`,
+							),
+						);
 						return;
 					}
 				}
@@ -254,7 +310,9 @@ async function ensureTestAssets(): Promise<void> {
 				const calls = pending.map(({ assetId: id, addr }) =>
 					api.tx.assets.mint(id, addr, mintAmount),
 				);
-				console.log(`        🔧 batch minting asset ${assetId} to ${pending.map((p) => p.idx).join(",")}...`);
+				console.log(
+					`        🔧 batch minting asset ${assetId} to ${pending.map((p) => p.idx).join(",")}...`,
+				);
 				await sendAndWait(
 					calls.length === 1 ? calls[0] : api.tx.utility.batchAll(calls),
 					alice,
@@ -332,6 +390,7 @@ describe("CoveredCall (PVM-Rust)", function () {
 			firstOptionExpiry = chainNow + 600n;
 
 			firstOptionId = await cc.read.nextOptionId();
+			const aliceTSTAbefore = await getERC20Balance(ERC20_TSTA, deployer.account.address);
 
 			await sendWithRetry("writeOption", () =>
 				cc.write.writeOption(
@@ -342,6 +401,10 @@ describe("CoveredCall (PVM-Rust)", function () {
 
 			const idAfter = await cc.read.nextOptionId();
 			expect(idAfter).to.equal(firstOptionId + 1n);
+
+			// Seller's underlying balance decreased by the collateral amount
+			const aliceTSTAafter = await getERC20Balance(ERC20_TSTA, deployer.account.address);
+			expect(aliceTSTAbefore - aliceTSTAafter).to.equal(1_000_000_000n);
 		});
 
 		it("stores correct option data with Listed status", async function () {
@@ -376,42 +439,28 @@ describe("CoveredCall (PVM-Rust)", function () {
 
 		it("rejects zero amount", async function () {
 			const chainNow = await getChainTimestamp();
-			try {
-				await deployer.writeContract({
+			await expectTxReverts(
+				deployer,
+				{
 					address: contractAddress,
-					abi: coveredCallAbi,
 					functionName: "writeOption",
 					args: [ASSETS.testA, ASSETS.testB, 0n, 1n, 100n, chainNow + 600n],
-					gas: 5_000_000n,
-				});
-				expect.fail("Should have reverted");
-			} catch (e: unknown) {
-				const msg = (e as Error).message;
-				expect(msg).to.satisfy(
-					(m: string) => m.includes("InvalidAmount") || isContractError(m),
-					`expected InvalidAmount or revert, got: ${msg.slice(0, 200)}`,
-				);
-			}
+				},
+				"InvalidAmount",
+			);
 		});
 
 		it("rejects past expiry", async function () {
 			const chainNow = await getChainTimestamp();
-			try {
-				await deployer.writeContract({
+			await expectTxReverts(
+				deployer,
+				{
 					address: contractAddress,
-					abi: coveredCallAbi,
 					functionName: "writeOption",
 					args: [ASSETS.testA, ASSETS.testB, 1_000n, 1n, 100n, chainNow - 10n],
-					gas: 5_000_000n,
-				});
-				expect.fail("Should have reverted");
-			} catch (e: unknown) {
-				const msg = (e as Error).message;
-				expect(msg).to.satisfy(
-					(m: string) => m.includes("InvalidExpiry") || isContractError(m),
-					`expected InvalidExpiry or revert, got: ${msg.slice(0, 200)}`,
-				);
-			}
+				},
+				"InvalidExpiry",
+			);
 		});
 
 		// TODO: support native asset via a wrapped-native (WDOT) ERC20 contract,
@@ -419,22 +468,15 @@ describe("CoveredCall (PVM-Rust)", function () {
 		// ERC20 precompile address for the native token.
 		it("rejects native asset as underlying", async function () {
 			const chainNow = await getChainTimestamp();
-			try {
-				await deployer.writeContract({
+			await expectTxReverts(
+				deployer,
+				{
 					address: contractAddress,
-					abi: coveredCallAbi,
 					functionName: "writeOption",
 					args: [ASSETS.native, ASSETS.testB, 1_000n, 1n, 100n, chainNow + 600n],
-					gas: 5_000_000n,
-				});
-				expect.fail("Should have reverted");
-			} catch (e: unknown) {
-				const msg = (e as Error).message;
-				expect(msg).to.satisfy(
-					(m: string) => m.includes("InvalidAsset") || isContractError(m),
-					`expected InvalidAsset or revert, got: ${msg.slice(0, 200)}`,
-				);
-			}
+				},
+				"InvalidAsset",
+			);
 		});
 	});
 
@@ -468,118 +510,113 @@ describe("CoveredCall (PVM-Rust)", function () {
 		});
 
 		it("rejects buying an already-bought option", async function () {
-			try {
-				await deployer.writeContract({
+			await expectTxReverts(
+				deployer,
+				{
 					address: contractAddress,
-					abi: coveredCallAbi,
 					functionName: "buyOption",
 					args: [buyableOptionId],
-					gas: 5_000_000n,
-				});
-				expect.fail("Should have reverted");
-			} catch (e: unknown) {
-				const msg = (e as Error).message;
-				expect(msg).to.satisfy(
-					(m: string) => m.includes("OptionNotListed") || isContractError(m),
-					`expected OptionNotListed or revert, got: ${msg.slice(0, 200)}`,
-				);
-			}
+				},
+				"OptionNotListed",
+			);
 		});
 	});
 
 	describe("Expire option", function () {
-		let expirableOptionId: bigint;
+		let longExpiryOptionId: bigint;
+		let shortExpiryOptionId: bigint;
 
 		before(async function () {
-			// Write an option with a short expiry (12 seconds — enough for 2-4 blocks
-			// depending on block time: 3s local dev, 6s Polkadot production)
+			// Long-expiry option for "rejects before expiry" test
 			await waitForNextBlock();
 			const chainNow = await getChainTimestamp();
-			const shortExpiry = chainNow + 12n;
 
-			await sendWithRetry("writeOption (short expiry)", () =>
-				cc.write.writeOption([ASSETS.testA, ASSETS.testB, 100_000n, 1n, 0n, shortExpiry], {
-					gas: 5_000_000n,
-				}),
+			await sendWithRetry("writeOption (long expiry)", () =>
+				cc.write.writeOption(
+					[ASSETS.testA, ASSETS.testB, 100_000n, 1n, 0n, chainNow + 600n],
+					{ gas: 5_000_000n },
+				),
 			);
-
-			expirableOptionId = (await cc.read.nextOptionId()) - 1n;
+			longExpiryOptionId = (await cc.read.nextOptionId()) - 1n;
 		});
 
 		it("rejects expire before expiry", async function () {
-			try {
-				await deployer.writeContract({
+			await expectTxReverts(
+				deployer,
+				{
 					address: contractAddress,
-					abi: coveredCallAbi,
 					functionName: "expireOption",
-					args: [expirableOptionId],
-					gas: 5_000_000n,
-				});
-				expect.fail("Should have reverted");
-			} catch (e: unknown) {
-				const msg = (e as Error).message;
-				expect(msg).to.satisfy(
-					(m: string) => m.includes("OptionNotExpired") || isContractError(m),
-					`expected OptionNotExpired or revert, got: ${msg.slice(0, 200)}`,
-				);
-			}
+					args: [longExpiryOptionId],
+				},
+				"OptionNotExpired",
+			);
 		});
 
 		it("expires option after expiry time", async function () {
-			for (let i = 0; i < 6; i++) {
+			// Write a separate option with short expiry for this test
+			await waitForNextBlock();
+			const chainNow = await getChainTimestamp();
+			const collateralAmount = 50_000n;
+
+			await sendWithRetry("writeOption (short expiry)", () =>
+				cc.write.writeOption(
+					[ASSETS.testA, ASSETS.testB, collateralAmount, 1n, 0n, chainNow + 15n],
+					{ gas: 5_000_000n },
+				),
+			);
+			shortExpiryOptionId = (await cc.read.nextOptionId()) - 1n;
+
+			// Wait for expiry to pass (~15s at 3s/block = 5 blocks, wait 8 for margin)
+			for (let i = 0; i < 8; i++) {
 				await waitForNextBlock();
 			}
+
+			const aliceTSTAbefore = await getERC20Balance(ERC20_TSTA, deployer.account.address);
 
 			await sendWithRetry("expireOption", () =>
 				deployer.writeContract({
 					address: contractAddress,
 					abi: coveredCallAbi,
 					functionName: "expireOption",
-					args: [expirableOptionId],
+					args: [shortExpiryOptionId],
 					gas: 5_000_000n,
 				}),
 			);
+
+			// expire_option clears all storage slots, so getOption returns zeros.
+			const [seller] = await cc.read.getOption([shortExpiryOptionId]);
+			expect(seller.toLowerCase()).to.equal("0x0000000000000000000000000000000000000000");
+
+			// Seller gets collateral back
+			const aliceTSTAafter = await getERC20Balance(ERC20_TSTA, deployer.account.address);
+			expect(aliceTSTAafter - aliceTSTAbefore).to.equal(collateralAmount);
 		});
 
 		it("rejects expiring an already-expired option", async function () {
 			await waitForNextBlock();
-			try {
-				await deployer.writeContract({
+			await expectTxReverts(
+				deployer,
+				{
 					address: contractAddress,
-					abi: coveredCallAbi,
 					functionName: "expireOption",
-					args: [expirableOptionId],
-					gas: 5_000_000n,
-				});
-				expect.fail("Should have reverted");
-			} catch (e: unknown) {
-				const msg = (e as Error).message;
-				expect(msg).to.satisfy(
-					(m: string) => m.includes("OptionNotActive") || isContractError(m),
-					`expected OptionNotActive or revert, got: ${msg.slice(0, 200)}`,
-				);
-			}
+					args: [shortExpiryOptionId],
+				},
+				"OptionNotActive",
+			);
 		});
 	});
 
 	describe("Exercise option", function () {
 		it("rejects exercising a non-existent option", async function () {
-			try {
-				await deployer.writeContract({
+			await expectTxReverts(
+				deployer,
+				{
 					address: contractAddress,
-					abi: coveredCallAbi,
 					functionName: "exerciseOption",
 					args: [999n],
-					gas: 5_000_000n,
-				});
-				expect.fail("Should have reverted");
-			} catch (e: unknown) {
-				const msg = (e as Error).message;
-				expect(msg).to.satisfy(
-					(m: string) => m.includes("OptionNotActive") || isContractError(m),
-					`expected OptionNotActive or revert, got: ${msg.slice(0, 200)}`,
-				);
-			}
+				},
+				"OptionNotActive",
+			);
 		});
 
 		it("rejects exercising a listed (not bought) option", async function () {
@@ -595,40 +632,24 @@ describe("CoveredCall (PVM-Rust)", function () {
 
 			const optionId = (await cc.read.nextOptionId()) - 1n;
 
-			try {
-				await deployer.writeContract({
+			await expectTxReverts(
+				deployer,
+				{
 					address: contractAddress,
-					abi: coveredCallAbi,
 					functionName: "exerciseOption",
 					args: [optionId],
-					gas: 5_000_000n,
-				});
-				expect.fail("Should have reverted");
-			} catch (e: unknown) {
-				const msg = (e as Error).message;
-				expect(msg).to.satisfy(
-					(m: string) => m.includes("OptionNotActive") || isContractError(m),
-					`expected OptionNotActive or revert, got: ${msg.slice(0, 200)}`,
-				);
-			}
+				},
+				"OptionNotActive",
+			);
 		});
 	});
 
 	describe("Fallback", function () {
 		it("reverts on unknown selector", async function () {
-			try {
-				await deployer.sendTransaction({
-					to: contractAddress,
-					data: "0xdeadbeef",
-				});
-				expect.fail("Should have reverted");
-			} catch (e: unknown) {
-				const msg = (e as Error).message;
-				expect(msg).to.satisfy(
-					(m: string) => m.includes("UnknownSelector") || isContractError(m),
-					"expected UnknownSelector or revert error",
-				);
-			}
+			await expectRawTxReverts(deployer, {
+				to: contractAddress,
+				data: "0xdeadbeef" as Hex,
+			});
 		});
 	});
 });
@@ -651,7 +672,9 @@ const assetConversionAbi = parseAbi([
 async function getWalletClientByIndex(index: number) {
 	const clients = await hre.viem.getWalletClients();
 	if (!clients[index]) {
-		throw new Error(`No wallet client at index ${index}. Add more accounts to hardhat.config.ts`);
+		throw new Error(
+			`No wallet client at index ${index}. Add more accounts to hardhat.config.ts`,
+		);
 	}
 	return clients[index];
 }
@@ -686,26 +709,32 @@ async function createPoolIfNeeded(asset1: Hex, asset2: Hex) {
 			}),
 		);
 	} catch (e: unknown) {
-		const msg = (e as Error).message;
-		if (!msg.includes("PoolExists") && !isContractError(msg)) throw e;
+		// Pool creation failed — verify it's because the pool already exists
+		// by checking that a quote succeeds. If the pool doesn't exist,
+		// the quote will throw and we re-throw the original error.
+		try {
+			await getDexQuote(asset1, asset2, 1_000n);
+			console.log("        ℹ️  pool already exists, continuing");
+		} catch {
+			throw e; // pool doesn't exist — original error is real
+		}
 	}
 }
 
 async function addLiquidity(asset1: Hex, asset2: Hex, amount1: bigint, amount2: bigint) {
 	const [alice] = await hre.viem.getWalletClients();
-	const publicClient = await hre.viem.getPublicClient();
 	const data = encodeFunctionData({
 		abi: assetConversionAbi,
 		functionName: "addLiquidity",
 		args: [asset1, asset2, amount1, amount2, 0n, 0n, alice.account.address],
 	});
-	const hash = await alice.sendTransaction({
-		to: PRECOMPILE,
-		data,
-		gas: 5_000_000n,
-	});
-	const receipt = await publicClient.waitForTransactionReceipt({ hash, timeout: 60_000 });
-	expect(receipt.status).to.equal("success", "addLiquidity reverted");
+	await sendWithRetry("addLiquidity", () =>
+		alice.sendTransaction({
+			to: PRECOMPILE,
+			data,
+			gas: 5_000_000n,
+		}),
+	);
 }
 
 async function getDexQuote(assetIn: Hex, assetOut: Hex, amountIn: bigint): Promise<bigint> {
@@ -725,18 +754,15 @@ function toNativeOrWithId(scaleHex: Hex): object | string {
 	}
 	// WithId(id): 0x01 + u32_le
 	const idBytes = scaleHex.slice(4); // skip "0x01"
-	const id = parseInt(idBytes.slice(0, 2), 16)
-		+ (parseInt(idBytes.slice(2, 4), 16) << 8)
-		+ (parseInt(idBytes.slice(4, 6), 16) << 16)
-		+ (parseInt(idBytes.slice(6, 8), 16) << 24);
+	const id =
+		parseInt(idBytes.slice(0, 2), 16) +
+		(parseInt(idBytes.slice(2, 4), 16) << 8) +
+		(parseInt(idBytes.slice(4, 6), 16) << 16) +
+		(parseInt(idBytes.slice(6, 8), 16) << 24);
 	return { WithId: id };
 }
 
-async function swapExact(
-	signerIndex: number,
-	path: Hex[],
-	amountIn: bigint,
-) {
+async function swapExact(signerIndex: number, path: Hex[], amountIn: bigint) {
 	// Use Substrate RPC extrinsic instead of precompile — the precompile's
 	// swapExactTokensForTokens reverts when called directly (not via contract).
 	const wsUrl = process.env.WS_URL || "ws://127.0.0.1:9944";
@@ -778,8 +804,12 @@ async function getERC20Balance(erc20Address: Hex, account: Hex): Promise<bigint>
 function ccAs(signerIndex: number, contractAddress: Hex) {
 	return {
 		async writeOption(
-			underlying: Hex, strikeAsset: Hex, amount: bigint,
-			strikePrice: bigint, premium: bigint, expiry: bigint,
+			underlying: Hex,
+			strikeAsset: Hex,
+			amount: bigint,
+			strikePrice: bigint,
+			premium: bigint,
+			expiry: bigint,
 		) {
 			const signer = await getWalletClientByIndex(signerIndex);
 			await sendWithRetry(`writeOption[${signerIndex}]`, () =>
@@ -849,7 +879,9 @@ describe("CoveredCall full lifecycle", function () {
 	this.timeout(300_000);
 
 	let contractAddress: Hex;
-	const ALICE = 0, BOB = 1, CHARLIE = 2;
+	const ALICE = 0,
+		BOB = 1,
+		CHARLIE = 2;
 	const POOL_AMOUNT = 100_000_000_000n; // 100e9
 	const OPTION_AMOUNT = 1_000_000_000n; // 1e9
 
@@ -902,40 +934,77 @@ describe("CoveredCall full lifecycle", function () {
 
 			const idBefore = await sharedContract.read.nextOptionId();
 			await ccAs(ALICE, contractAddress).writeOption(
-				ASSETS.testA, ASSETS.testB, OPTION_AMOUNT, 1n, 500n, expiry,
+				ASSETS.testA,
+				ASSETS.testB,
+				OPTION_AMOUNT,
+				1n,
+				500n,
+				expiry,
 			);
 			optionId = idBefore;
 
-			const [seller, , , , , , , , , , status] = await sharedContract.read.getOption([optionId]);
+			const [seller, , , , , , , , , , status] = await sharedContract.read.getOption([
+				optionId,
+			]);
 			expect(seller.toLowerCase()).to.equal(ALICE_ADDR.toLowerCase());
 			expect(status).to.equal(STATUS_LISTED);
 		});
 
 		it("2. Bob buys the option (pays premium)", async function () {
 			await waitForNextBlock();
+
+			const bobTSTBbefore = await getERC20Balance(ERC20_TSTB, BOB_ADDR);
+			const aliceTSTBbefore = await getERC20Balance(ERC20_TSTB, ALICE_ADDR);
+
 			await ccAs(BOB, contractAddress).buyOption(optionId);
 
-			const [, , , , , , , , buyer, , status] = await sharedContract.read.getOption([optionId]);
+			const bobTSTBafter = await getERC20Balance(ERC20_TSTB, BOB_ADDR);
+			const aliceTSTBafter = await getERC20Balance(ERC20_TSTB, ALICE_ADDR);
+
+			// Bob pays premium (500 TSTB) to Alice
+			expect(bobTSTBbefore - bobTSTBafter).to.equal(500n);
+			expect(aliceTSTBafter - aliceTSTBbefore).to.equal(500n);
+
+			const [, , , , , , , , buyer, , status] = await sharedContract.read.getOption([
+				optionId,
+			]);
 			expect(buyer.toLowerCase()).to.equal(BOB_ADDR.toLowerCase());
 			expect(status).to.equal(STATUS_ACTIVE);
 		});
 
 		it("3. Alice swaps TSTB→TSTA to increase TSTA price (make option ITM)", async function () {
 			await waitForNextBlock();
+			const quoteBefore = await getDexQuote(ASSETS.testA, ASSETS.testB, OPTION_AMOUNT);
 			// Large swap: push lots of TSTB into the pool, making TSTA more expensive
 			const swapAmount = POOL_AMOUNT / 5n; // 20% of pool — enough to skew price
 			await swapExact(ALICE, [ASSETS.testB, ASSETS.testA], swapAmount);
+			const quoteAfter = await getDexQuote(ASSETS.testA, ASSETS.testB, OPTION_AMOUNT);
+			expect(quoteAfter > quoteBefore).to.equal(
+				true,
+				`Expected TSTA price to increase: ${quoteBefore} → ${quoteAfter}`,
+			);
 		});
 
 		it("4. Bob exercises the option (ITM)", async function () {
 			await waitForNextBlock();
 
 			const bobTSTAbefore = await getERC20Balance(ERC20_TSTA, BOB_ADDR);
-			await ccAs(BOB, contractAddress).exerciseOption(optionId);
-			const bobTSTAafter = await getERC20Balance(ERC20_TSTA, BOB_ADDR);
+			const bobTSTBbefore = await getERC20Balance(ERC20_TSTB, BOB_ADDR);
+			const aliceTSTBbefore = await getERC20Balance(ERC20_TSTB, ALICE_ADDR);
 
-			// Bob should have received the underlying TSTA
+			await ccAs(BOB, contractAddress).exerciseOption(optionId);
+
+			const bobTSTAafter = await getERC20Balance(ERC20_TSTA, BOB_ADDR);
+			const bobTSTBafter = await getERC20Balance(ERC20_TSTB, BOB_ADDR);
+			const aliceTSTBafter = await getERC20Balance(ERC20_TSTB, ALICE_ADDR);
+
+			// Bob receives the underlying TSTA
 			expect(bobTSTAafter - bobTSTAbefore).to.equal(OPTION_AMOUNT);
+			// Bob pays strikePrice * amount of TSTB to seller
+			const strikeCost = 1n * OPTION_AMOUNT;
+			expect(bobTSTBbefore - bobTSTBafter).to.equal(strikeCost);
+			// Alice (seller) receives the strike payment
+			expect(aliceTSTBafter - aliceTSTBbefore).to.equal(strikeCost);
 
 			const [, , , , , , , , , , status] = await sharedContract.read.getOption([optionId]);
 			expect(status).to.equal(STATUS_EXERCISED);
@@ -953,16 +1022,41 @@ describe("CoveredCall full lifecycle", function () {
 
 			const idBefore = await sharedContract.read.nextOptionId();
 			await ccAs(ALICE, contractAddress).writeOption(
-				ASSETS.testA, ASSETS.testB, OPTION_AMOUNT, 1n, 500n, expiry,
+				ASSETS.testA,
+				ASSETS.testB,
+				OPTION_AMOUNT,
+				1n,
+				500n,
+				expiry,
 			);
 			optionId = idBefore;
+
+			const idAfter = await sharedContract.read.nextOptionId();
+			expect(idAfter).to.equal(optionId + 1n);
+			const [seller, , , , , , , , , , status] = await sharedContract.read.getOption([
+				optionId,
+			]);
+			expect(seller.toLowerCase()).to.equal(ALICE_ADDR.toLowerCase());
+			expect(status).to.equal(STATUS_LISTED);
 		});
 
-		it("2. Bob buys the option", async function () {
+		it("2. Bob buys the option (pays premium to Alice)", async function () {
 			await waitForNextBlock();
+
+			const bobTSTBbefore = await getERC20Balance(ERC20_TSTB, BOB_ADDR);
+			const aliceTSTBbefore = await getERC20Balance(ERC20_TSTB, ALICE_ADDR);
+
 			await ccAs(BOB, contractAddress).buyOption(optionId);
 
-			const [, , , , , , , , buyer, , status] = await sharedContract.read.getOption([optionId]);
+			const bobTSTBafter = await getERC20Balance(ERC20_TSTB, BOB_ADDR);
+			const aliceTSTBafter = await getERC20Balance(ERC20_TSTB, ALICE_ADDR);
+
+			expect(bobTSTBbefore - bobTSTBafter).to.equal(500n);
+			expect(aliceTSTBafter - aliceTSTBbefore).to.equal(500n);
+
+			const [, , , , , , , , buyer, , status] = await sharedContract.read.getOption([
+				optionId,
+			]);
 			expect(buyer.toLowerCase()).to.equal(BOB_ADDR.toLowerCase());
 			expect(status).to.equal(STATUS_ACTIVE);
 		});
@@ -971,25 +1065,55 @@ describe("CoveredCall full lifecycle", function () {
 			await waitForNextBlock();
 			await ccAs(BOB, contractAddress).resellOption(optionId, 300n);
 
-			const [, , , , , , , , , askPrice, status] = await sharedContract.read.getOption([optionId]);
+			const [, , , , , , , , , askPrice, status] = await sharedContract.read.getOption([
+				optionId,
+			]);
 			expect(status).to.equal(STATUS_RESALE);
 			expect(askPrice).to.equal(300n);
 		});
 
 		it("4. Charlie buys the resold option (pays ask price to Bob)", async function () {
 			await waitForNextBlock();
+
+			const charlieTSTBbefore = await getERC20Balance(ERC20_TSTB, CHARLIE_ADDR);
+			const bobTSTBbefore = await getERC20Balance(ERC20_TSTB, BOB_ADDR);
+
 			await ccAs(CHARLIE, contractAddress).buyOption(optionId);
 
-			const [, , , , , , , , buyer, askPrice, status] = await sharedContract.read.getOption([optionId]);
+			const charlieTSTBafter = await getERC20Balance(ERC20_TSTB, CHARLIE_ADDR);
+			const bobTSTBafter = await getERC20Balance(ERC20_TSTB, BOB_ADDR);
+
+			// Charlie pays 300 TSTB ask price to Bob
+			expect(charlieTSTBbefore - charlieTSTBafter).to.equal(300n);
+			expect(bobTSTBafter - bobTSTBbefore).to.equal(300n);
+
+			const [, , , , , , , , buyer, askPrice, status] = await sharedContract.read.getOption([
+				optionId,
+			]);
 			expect(buyer.toLowerCase()).to.equal(CHARLIE_ADDR.toLowerCase());
 			expect(status).to.equal(STATUS_ACTIVE);
-			expect(askPrice).to.equal(0n); // cleared after resale
+			expect(askPrice).to.equal(0n);
 		});
 
 		it("5. Charlie exercises the option", async function () {
-			// Pool should still be skewed from scenario 1 swap, so TSTA is expensive → ITM
 			await waitForNextBlock();
+
+			const charlieTSTAbefore = await getERC20Balance(ERC20_TSTA, CHARLIE_ADDR);
+			const charlieTSTBbefore = await getERC20Balance(ERC20_TSTB, CHARLIE_ADDR);
+			const aliceTSTBbefore = await getERC20Balance(ERC20_TSTB, ALICE_ADDR);
+
 			await ccAs(CHARLIE, contractAddress).exerciseOption(optionId);
+
+			const charlieTSTAafter = await getERC20Balance(ERC20_TSTA, CHARLIE_ADDR);
+			const charlieTSTBafter = await getERC20Balance(ERC20_TSTB, CHARLIE_ADDR);
+			const aliceTSTBafter = await getERC20Balance(ERC20_TSTB, ALICE_ADDR);
+
+			// Charlie receives underlying TSTA
+			expect(charlieTSTAafter - charlieTSTAbefore).to.equal(OPTION_AMOUNT);
+			// Charlie pays strike cost to Alice
+			const strikeCost = 1n * OPTION_AMOUNT;
+			expect(charlieTSTBbefore - charlieTSTBafter).to.equal(strikeCost);
+			expect(aliceTSTBafter - aliceTSTBbefore).to.equal(strikeCost);
 
 			const [, , , , , , , , , , status] = await sharedContract.read.getOption([optionId]);
 			expect(status).to.equal(STATUS_EXERCISED);
@@ -1002,22 +1126,24 @@ describe("CoveredCall full lifecycle", function () {
 
 		it("1. Alice swaps more TSTB→TSTA to ensure TSTA is expensive", async function () {
 			await waitForNextBlock();
+			const quoteBefore = await getDexQuote(ASSETS.testA, ASSETS.testB, OPTION_AMOUNT);
 			const swapAmount = POOL_AMOUNT / 5n;
 			await swapExact(ALICE, [ASSETS.testB, ASSETS.testA], swapAmount);
+			const quoteAfter = await getDexQuote(ASSETS.testA, ASSETS.testB, OPTION_AMOUNT);
+			expect(quoteAfter > quoteBefore).to.equal(
+				true,
+				`Expected price to increase: ${quoteBefore} → ${quoteAfter}`,
+			);
 		});
 
 		it("2. Verify TSTA is worth more than 1 TSTB (already ITM for strike=1)", async function () {
 			await waitForNextBlock();
-			const publicClient = await hre.viem.getPublicClient();
-			const quote = await publicClient.readContract({
-				address: PRECOMPILE,
-				abi: assetConversionAbi,
-				functionName: "quoteExactTokensForTokens",
-				args: [ASSETS.testA, ASSETS.testB, OPTION_AMOUNT, true],
-			}) as bigint;
+			const quote = await getDexQuote(ASSETS.testA, ASSETS.testB, OPTION_AMOUNT);
 			// Market value should exceed strike cost (1 * OPTION_AMOUNT)
-			expect(quote > OPTION_AMOUNT).to.equal(true,
-				`Expected quote ${quote} > strike cost ${OPTION_AMOUNT}`);
+			expect(quote > OPTION_AMOUNT).to.equal(
+				true,
+				`Expected quote ${quote} > strike cost ${OPTION_AMOUNT}`,
+			);
 		});
 
 		it("3. Alice writes a call that is already in-the-money", async function () {
@@ -1027,16 +1153,45 @@ describe("CoveredCall full lifecycle", function () {
 
 			const idBefore = await sharedContract.read.nextOptionId();
 			await ccAs(ALICE, contractAddress).writeOption(
-				ASSETS.testA, ASSETS.testB, OPTION_AMOUNT, 1n, 100n, expiry,
+				ASSETS.testA,
+				ASSETS.testB,
+				OPTION_AMOUNT,
+				1n,
+				100n,
+				expiry,
 			);
 			optionId = idBefore;
+
+			const [seller, , , , , , , , , , status] = await sharedContract.read.getOption([
+				optionId,
+			]);
+			expect(seller.toLowerCase()).to.equal(ALICE_ADDR.toLowerCase());
+			expect(status).to.equal(STATUS_LISTED);
 		});
 
 		it("4. Bob buys and immediately exercises (already ITM)", async function () {
 			await waitForNextBlock();
 			await ccAs(BOB, contractAddress).buyOption(optionId);
 			await waitForNextBlock();
+
+			// Snapshot AFTER buy so premium is excluded from exercise delta
+			const bobTSTAbefore = await getERC20Balance(ERC20_TSTA, BOB_ADDR);
+			const bobTSTBbefore = await getERC20Balance(ERC20_TSTB, BOB_ADDR);
+			const aliceTSTBbefore = await getERC20Balance(ERC20_TSTB, ALICE_ADDR);
+
 			await ccAs(BOB, contractAddress).exerciseOption(optionId);
+
+			const bobTSTAafter = await getERC20Balance(ERC20_TSTA, BOB_ADDR);
+			const bobTSTBafter = await getERC20Balance(ERC20_TSTB, BOB_ADDR);
+			const aliceTSTBafter = await getERC20Balance(ERC20_TSTB, ALICE_ADDR);
+
+			// Bob receives underlying
+			expect(bobTSTAafter - bobTSTAbefore).to.equal(OPTION_AMOUNT);
+			// Bob pays strike cost
+			const strikeCost = 1n * OPTION_AMOUNT;
+			expect(bobTSTBbefore - bobTSTBafter).to.equal(strikeCost);
+			// Alice receives strike payment
+			expect(aliceTSTBafter - aliceTSTBbefore).to.equal(strikeCost);
 
 			const [, , , , , , , , , , status] = await sharedContract.read.getOption([optionId]);
 			expect(status).to.equal(STATUS_EXERCISED);
@@ -1062,16 +1217,40 @@ describe("CoveredCall full lifecycle", function () {
 			// Strike price so high the option can never be ITM with current pool
 			const idBefore = await sharedContract.read.nextOptionId();
 			await ccAs(ALICE, contractAddress).writeOption(
-				ASSETS.testA, ASSETS.testB, OPTION_AMOUNT, 1000n, 100n, expiry,
+				ASSETS.testA,
+				ASSETS.testB,
+				OPTION_AMOUNT,
+				1000n,
+				100n,
+				expiry,
 			);
 			optionId = idBefore;
+
+			const [seller, , , , strikePrice, , , , , , status] =
+				await sharedContract.read.getOption([optionId]);
+			expect(seller.toLowerCase()).to.equal(ALICE_ADDR.toLowerCase());
+			expect(strikePrice).to.equal(1000n);
+			expect(status).to.equal(STATUS_LISTED);
 		});
 
-		it("2. Bob buys the option", async function () {
+		it("2. Bob buys the option (pays premium)", async function () {
 			await waitForNextBlock();
+
+			const bobTSTBbefore = await getERC20Balance(ERC20_TSTB, BOB_ADDR);
+			const aliceTSTBbefore = await getERC20Balance(ERC20_TSTB, ALICE_ADDR);
+
 			await ccAs(BOB, contractAddress).buyOption(optionId);
 
-			const [, , , , , , , , buyer, , status] = await sharedContract.read.getOption([optionId]);
+			const bobTSTBafter = await getERC20Balance(ERC20_TSTB, BOB_ADDR);
+			const aliceTSTBafter = await getERC20Balance(ERC20_TSTB, ALICE_ADDR);
+
+			// Bob pays 100 TSTB premium to Alice
+			expect(bobTSTBbefore - bobTSTBafter).to.equal(100n);
+			expect(aliceTSTBafter - aliceTSTBbefore).to.equal(100n);
+
+			const [, , , , , , , , buyer, , status] = await sharedContract.read.getOption([
+				optionId,
+			]);
 			expect(buyer.toLowerCase()).to.equal(BOB_ADDR.toLowerCase());
 			expect(status).to.equal(STATUS_ACTIVE);
 		});
@@ -1079,22 +1258,15 @@ describe("CoveredCall full lifecycle", function () {
 		it("3. Bob tries to exercise but option is OTM → reverts", async function () {
 			await waitForNextBlock();
 			const bob = await getWalletClientByIndex(BOB);
-			try {
-				await bob.writeContract({
+			await expectTxReverts(
+				bob,
+				{
 					address: contractAddress,
-					abi: coveredCallAbi,
 					functionName: "exerciseOption",
 					args: [optionId],
-					gas: 5_000_000n,
-				});
-				expect.fail("Should have reverted with NotInTheMoney");
-			} catch (e: unknown) {
-				const msg = (e as Error).message;
-				expect(msg).to.satisfy(
-					(m: string) => m.includes("NotInTheMoney") || isContractError(m),
-					`expected NotInTheMoney or revert, got: ${msg.slice(0, 200)}`,
-				);
-			}
+				},
+				"NotInTheMoney",
+			);
 		});
 	});
 });
