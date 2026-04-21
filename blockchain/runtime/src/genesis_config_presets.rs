@@ -19,7 +19,7 @@ use xcm::prelude::XCM_VERSION;
 /// The default XCM version to set in genesis config.
 const SAFE_XCM_VERSION: u32 = XCM_VERSION;
 /// Parachain id used for genesis config presets.
-pub const PARACHAIN_ID: u32 = 1000;
+pub const PARACHAIN_ID: u32 = 5187;
 
 /// Generate the session keys from individual elements.
 pub fn template_session_keys(keys: AuraId) -> SessionKeys {
