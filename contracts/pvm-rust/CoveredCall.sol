@@ -4,7 +4,7 @@ pragma solidity ^0.8.28;
 /// @title ICoveredCall — Covered call options backed by ERC20 collateral.
 /// @notice Assets are identified by their SCALE-encoded AssetKind (`bytes`).
 /// The caller must `approve` this contract via the ERC20 precompile at 0x0120
-/// before calling writeOption or exerciseOption.
+/// before calling writeOption, buyOption, or exerciseOption.
 /// Uses the asset-conversion precompile at 0x0420 for in-the-money price checks.
 interface ICoveredCall {
     // --- Events ---
@@ -14,7 +14,19 @@ interface ICoveredCall {
         address indexed seller,
         uint256 amount,
         uint256 strikePrice,
+        uint256 premium,
         uint256 expiry
+    );
+
+    event OptionBought(
+        uint256 indexed optionId,
+        address indexed buyer
+    );
+
+    event OptionResale(
+        uint256 indexed optionId,
+        address indexed seller,
+        uint256 askPrice
     );
 
     event OptionExercised(
@@ -32,8 +44,10 @@ interface ICoveredCall {
     error PrecompileCallFailed();
     error TransferFromFailed();
     error OptionNotActive();
+    error OptionNotListed();
     error OptionNotExpired();
     error OptionAlreadyExpired();
+    error NotOptionBuyer();
     error NotInTheMoney();
     error InvalidAsset();
     error InvalidAmount();
@@ -46,6 +60,7 @@ interface ICoveredCall {
     /// @param strikeAsset SCALE-encoded asset identifier for the strike token
     /// @param amount Amount of underlying to deposit as collateral
     /// @param strikePrice Price per unit in strike asset terms
+    /// @param premium Price to buy (acquire) the option, denominated in strike asset
     /// @param expiry Unix timestamp (seconds) at which the option expires
     /// @return optionId The ID of the newly created option
     function writeOption(
@@ -53,11 +68,23 @@ interface ICoveredCall {
         bytes calldata strikeAsset,
         uint256 amount,
         uint256 strikePrice,
+        uint256 premium,
         uint256 expiry
     ) external returns (uint256 optionId);
 
-    /// @notice Exercise an active option before expiry. Buyer pays strikePrice * amount
-    ///         of the strike asset directly to the seller and receives the underlying collateral.
+    /// @notice Buy an option from the orderbook. Pays the premium (first sale) or
+    ///         ask price (resale) to the seller/current owner.
+    /// @param optionId The option to buy
+    function buyOption(uint256 optionId) external;
+
+    /// @notice List a bought option for resale on the secondary market.
+    /// @param optionId The option to resell
+    /// @param askPrice Price in strike asset that the next buyer must pay
+    function resellOption(uint256 optionId, uint256 askPrice) external;
+
+    /// @notice Exercise an active option before expiry. Only the buyer can exercise.
+    ///         Buyer pays strikePrice * amount of the strike asset directly to the
+    ///         seller and receives the underlying collateral.
     ///         Only exercisable when the option is in-the-money (market value > strike cost).
     /// @param optionId The option to exercise
     function exerciseOption(uint256 optionId) external;
@@ -75,8 +102,11 @@ interface ICoveredCall {
         bytes memory strikeAsset,
         uint256 amount,
         uint256 strikePrice,
+        uint256 premium,
         uint256 expiry,
         uint256 created,
+        address buyer,
+        uint256 askPrice,
         uint256 status
     );
 

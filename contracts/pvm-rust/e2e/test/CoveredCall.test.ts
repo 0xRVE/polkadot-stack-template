@@ -10,16 +10,19 @@ import { ApiPromise, WsProvider, Keyring } from "@polkadot/api";
 // ---------------------------------------------------------------------------
 
 const coveredCallAbi = parseAbi([
-	"function writeOption(bytes underlying, bytes strikeAsset, uint256 amount, uint256 strikePrice, uint256 expiry) external returns (uint256)",
+	"function writeOption(bytes underlying, bytes strikeAsset, uint256 amount, uint256 strikePrice, uint256 premium, uint256 expiry) external returns (uint256)",
+	"function buyOption(uint256 optionId) external",
 	"function exerciseOption(uint256 optionId) external",
 	"function expireOption(uint256 optionId) external",
-	"function getOption(uint256 optionId) external view returns (address seller, bytes underlying, bytes strikeAsset, uint256 amount, uint256 strikePrice, uint256 expiry, uint256 created, uint256 status)",
+	"function getOption(uint256 optionId) external view returns (address seller, bytes underlying, bytes strikeAsset, uint256 amount, uint256 strikePrice, uint256 premium, uint256 expiry, uint256 created, address buyer, uint256 askPrice, uint256 status)",
 	"function nextOptionId() external view returns (uint256)",
 	"error PrecompileCallFailed()",
 	"error TransferFromFailed()",
 	"error OptionNotActive()",
+	"error OptionNotListed()",
 	"error OptionNotExpired()",
 	"error OptionAlreadyExpired()",
+	"error NotOptionBuyer()",
 	"error NotInTheMoney()",
 	"error InvalidAsset()",
 	"error InvalidAmount()",
@@ -218,6 +221,10 @@ async function ensureTestAssets(): Promise<void> {
 	}
 }
 
+// Status constants matching the contract
+const STATUS_LISTED = 0n;
+const STATUS_ACTIVE = 1n;
+
 // ---------------------------------------------------------------------------
 // Tests
 // ---------------------------------------------------------------------------
@@ -273,13 +280,13 @@ describe("CoveredCall (PVM-Rust)", function () {
 		it("writes an option and increments nextOptionId", async function () {
 			await waitForNextBlock();
 			const chainNow = await getChainTimestamp();
-			firstOptionExpiry = chainNow + 600n; // 10 minutes from now
+			firstOptionExpiry = chainNow + 600n;
 
 			firstOptionId = await cc.read.nextOptionId();
 
 			await sendWithRetry("writeOption", () =>
 				cc.write.writeOption(
-					[ASSETS.testA, ASSETS.testB, 1_000_000_000n, 1n, firstOptionExpiry],
+					[ASSETS.testA, ASSETS.testB, 1_000_000_000n, 1n, 500n, firstOptionExpiry],
 					{ gas: 5_000_000n },
 				),
 			);
@@ -288,36 +295,34 @@ describe("CoveredCall (PVM-Rust)", function () {
 			expect(idAfter).to.equal(firstOptionId + 1n);
 		});
 
-		it("stores correct option data", async function () {
-			const [seller, underlying, strikeAsset, amount, strikePrice, expiry, created, status] =
-				await cc.read.getOption([firstOptionId]);
+		it("stores correct option data with Listed status", async function () {
+			const [
+				seller,
+				underlying,
+				strikeAsset,
+				amount,
+				strikePrice,
+				premium,
+				expiry,
+				created,
+				buyer,
+				askPrice,
+				status,
+			] = await cc.read.getOption([firstOptionId]);
 
 			expect(seller.toLowerCase()).to.equal(deployer.account.address.toLowerCase());
 			expect(underlying.toLowerCase()).to.equal(ASSETS.testA.toLowerCase());
 			expect(strikeAsset.toLowerCase()).to.equal(ASSETS.testB.toLowerCase());
 			expect(amount).to.equal(1_000_000_000n);
 			expect(strikePrice).to.equal(1n);
+			expect(premium).to.equal(500n);
 			expect(expiry).to.equal(firstOptionExpiry);
-			// created is the chain timestamp at the block the tx was included —
-			// it must be > 0 and ≤ the expiry we set (which is chainNow + 600)
 			expect(created > 0n).to.equal(true, "created should be > 0");
 			expect(created <= firstOptionExpiry).to.equal(true, "created should be <= expiry");
-			expect(status).to.equal(0n); // Active
-		});
-
-		it("increments option counter", async function () {
-			await waitForNextBlock();
-			const chainNow = await getChainTimestamp();
-			const expiry = chainNow + 600n;
-
-			await sendWithRetry("writeOption #2", () =>
-				cc.write.writeOption([ASSETS.testB, ASSETS.testA, 500_000_000n, 2n, expiry], {
-					gas: 5_000_000n,
-				}),
-			);
-
-			const nextId = await cc.read.nextOptionId();
-			expect(nextId).to.equal(2n);
+			// No buyer yet — zero address
+			expect(buyer.toLowerCase()).to.equal("0x0000000000000000000000000000000000000000");
+			expect(askPrice).to.equal(0n);
+			expect(status).to.equal(STATUS_LISTED);
 		});
 
 		it("rejects zero amount", async function () {
@@ -327,7 +332,7 @@ describe("CoveredCall (PVM-Rust)", function () {
 					address: contractAddress,
 					abi: coveredCallAbi,
 					functionName: "writeOption",
-					args: [ASSETS.testA, ASSETS.testB, 0n, 1n, chainNow + 600n],
+					args: [ASSETS.testA, ASSETS.testB, 0n, 1n, 100n, chainNow + 600n],
 					gas: 5_000_000n,
 				});
 				expect.fail("Should have reverted");
@@ -347,7 +352,7 @@ describe("CoveredCall (PVM-Rust)", function () {
 					address: contractAddress,
 					abi: coveredCallAbi,
 					functionName: "writeOption",
-					args: [ASSETS.testA, ASSETS.testB, 1_000n, 1n, chainNow - 10n],
+					args: [ASSETS.testA, ASSETS.testB, 1_000n, 1n, 100n, chainNow - 10n],
 					gas: 5_000_000n,
 				});
 				expect.fail("Should have reverted");
@@ -370,7 +375,7 @@ describe("CoveredCall (PVM-Rust)", function () {
 					address: contractAddress,
 					abi: coveredCallAbi,
 					functionName: "writeOption",
-					args: [ASSETS.native, ASSETS.testB, 1_000n, 1n, chainNow + 600n],
+					args: [ASSETS.native, ASSETS.testB, 1_000n, 1n, 100n, chainNow + 600n],
 					gas: 5_000_000n,
 				});
 				expect.fail("Should have reverted");
@@ -379,6 +384,55 @@ describe("CoveredCall (PVM-Rust)", function () {
 				expect(msg).to.satisfy(
 					(m: string) => m.includes("InvalidAsset") || isContractError(m),
 					`expected InvalidAsset or revert, got: ${msg.slice(0, 200)}`,
+				);
+			}
+		});
+	});
+
+	describe("Buy option", function () {
+		let buyableOptionId: bigint;
+
+		before(async function () {
+			await waitForNextBlock();
+			const chainNow = await getChainTimestamp();
+
+			await sendWithRetry("writeOption (buyable)", () =>
+				cc.write.writeOption(
+					[ASSETS.testA, ASSETS.testB, 100_000n, 1n, 200n, chainNow + 600n],
+					{ gas: 5_000_000n },
+				),
+			);
+
+			buyableOptionId = (await cc.read.nextOptionId()) - 1n;
+		});
+
+		it("buys a listed option and sets status to Active", async function () {
+			await waitForNextBlock();
+
+			await sendWithRetry("buyOption", () =>
+				cc.write.buyOption([buyableOptionId], { gas: 5_000_000n }),
+			);
+
+			const [, , , , , , , , buyer, , status] = await cc.read.getOption([buyableOptionId]);
+			expect(buyer.toLowerCase()).to.equal(deployer.account.address.toLowerCase());
+			expect(status).to.equal(STATUS_ACTIVE);
+		});
+
+		it("rejects buying an already-bought option", async function () {
+			try {
+				await deployer.writeContract({
+					address: contractAddress,
+					abi: coveredCallAbi,
+					functionName: "buyOption",
+					args: [buyableOptionId],
+					gas: 5_000_000n,
+				});
+				expect.fail("Should have reverted");
+			} catch (e: unknown) {
+				const msg = (e as Error).message;
+				expect(msg).to.satisfy(
+					(m: string) => m.includes("OptionNotListed") || isContractError(m),
+					`expected OptionNotListed or revert, got: ${msg.slice(0, 200)}`,
 				);
 			}
 		});
@@ -395,7 +449,7 @@ describe("CoveredCall (PVM-Rust)", function () {
 			const shortExpiry = chainNow + 12n;
 
 			await sendWithRetry("writeOption (short expiry)", () =>
-				cc.write.writeOption([ASSETS.testA, ASSETS.testB, 100_000n, 1n, shortExpiry], {
+				cc.write.writeOption([ASSETS.testA, ASSETS.testB, 100_000n, 1n, 0n, shortExpiry], {
 					gas: 5_000_000n,
 				}),
 			);
@@ -404,7 +458,6 @@ describe("CoveredCall (PVM-Rust)", function () {
 		});
 
 		it("rejects expire before expiry", async function () {
-			// The option was just written — should still be active
 			try {
 				await deployer.writeContract({
 					address: contractAddress,
@@ -424,7 +477,6 @@ describe("CoveredCall (PVM-Rust)", function () {
 		});
 
 		it("expires option after expiry time", async function () {
-			// Wait for the short expiry to pass (2-3 blocks)
 			for (let i = 0; i < 6; i++) {
 				await waitForNextBlock();
 			}
@@ -481,23 +533,18 @@ describe("CoveredCall (PVM-Rust)", function () {
 			}
 		});
 
-		it("rejects exercising an expired option", async function () {
-			// Write an option with very short expiry, then wait for it to pass
+		it("rejects exercising a listed (not bought) option", async function () {
 			await waitForNextBlock();
 			const chainNow = await getChainTimestamp();
 
-			await sendWithRetry("writeOption (exercise-expired)", () =>
-				cc.write.writeOption([ASSETS.testA, ASSETS.testB, 100_000n, 1n, chainNow + 6n], {
-					gas: 5_000_000n,
-				}),
+			await sendWithRetry("writeOption (listed-only)", () =>
+				cc.write.writeOption(
+					[ASSETS.testA, ASSETS.testB, 100_000n, 1n, 0n, chainNow + 600n],
+					{ gas: 5_000_000n },
+				),
 			);
 
 			const optionId = (await cc.read.nextOptionId()) - 1n;
-
-			// Wait for expiry
-			for (let i = 0; i < 6; i++) {
-				await waitForNextBlock();
-			}
 
 			try {
 				await deployer.writeContract({
@@ -511,8 +558,8 @@ describe("CoveredCall (PVM-Rust)", function () {
 			} catch (e: unknown) {
 				const msg = (e as Error).message;
 				expect(msg).to.satisfy(
-					(m: string) => m.includes("OptionAlreadyExpired") || isContractError(m),
-					`expected OptionAlreadyExpired or revert, got: ${msg.slice(0, 200)}`,
+					(m: string) => m.includes("OptionNotActive") || isContractError(m),
+					`expected OptionNotActive or revert, got: ${msg.slice(0, 200)}`,
 				);
 			}
 		});

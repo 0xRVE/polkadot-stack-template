@@ -44,10 +44,15 @@ mod covered_call {
 	const TAG_EXPIRY: u8 = 0x05;
 	const TAG_STATUS: u8 = 0x06;
 	const TAG_CREATED: u8 = 0x07;
+	const TAG_PREMIUM: u8 = 0x08;
+	const TAG_BUYER: u8 = 0x09;
+	const TAG_ASK_PRICE: u8 = 0x0A;
 
-	const STATUS_ACTIVE: u8 = 0;
-	const STATUS_EXERCISED: u8 = 1;
-	const STATUS_EXPIRED: u8 = 2;
+	const STATUS_LISTED: u8 = 0;
+	const STATUS_ACTIVE: u8 = 1;
+	const STATUS_EXERCISED: u8 = 2;
+	const STATUS_EXPIRED: u8 = 3;
+	const STATUS_RESALE: u8 = 4;
 
 	/// Global slot for next option ID counter.
 	const SLOT_NEXT_ID: [u8; 32] = [0u8; 32];
@@ -59,8 +64,10 @@ mod covered_call {
 		PrecompileCallFailed,
 		TransferFromFailed,
 		OptionNotActive,
+		OptionNotListed,
 		OptionNotExpired,
 		OptionAlreadyExpired,
+		NotOptionBuyer,
 		NotInTheMoney,
 		InvalidAsset,
 		InvalidAmount,
@@ -74,8 +81,10 @@ mod covered_call {
 				Error::PrecompileCallFailed => b"PrecompileCallFailed",
 				Error::TransferFromFailed => b"TransferFromFailed",
 				Error::OptionNotActive => b"OptionNotActive",
+				Error::OptionNotListed => b"OptionNotListed",
 				Error::OptionNotExpired => b"OptionNotExpired",
 				Error::OptionAlreadyExpired => b"OptionAlreadyExpired",
+				Error::NotOptionBuyer => b"NotOptionBuyer",
 				Error::NotInTheMoney => b"NotInTheMoney",
 				Error::InvalidAsset => b"InvalidAsset",
 				Error::InvalidAmount => b"InvalidAmount",
@@ -100,6 +109,7 @@ mod covered_call {
 		strike_asset: Bytes,
 		amount: U256,
 		strike_price: U256,
+		premium: U256,
 		expiry: U256,
 	) -> Result<U256, Error> {
 		if amount == U256::ZERO || strike_price == U256::ZERO {
@@ -132,17 +142,67 @@ mod covered_call {
 		storage_set_bytes(&option_slot(option_id, TAG_STRIKE_ASSET), &strike_asset.0);
 		storage_set_u256(&option_slot(option_id, TAG_AMOUNT), amount);
 		storage_set_u256(&option_slot(option_id, TAG_STRIKE_PRICE), strike_price);
+		storage_set_u256(&option_slot(option_id, TAG_PREMIUM), premium);
 		storage_set_u256(&option_slot(option_id, TAG_EXPIRY), expiry);
 		storage_set_u256(&option_slot(option_id, TAG_CREATED), current_time);
-		storage_set_u256(&option_slot(option_id, TAG_STATUS), U256::from(STATUS_ACTIVE));
+		storage_set_u256(&option_slot(option_id, TAG_STATUS), U256::from(STATUS_LISTED));
 
-		emit_option_written(option_id, &caller, amount, strike_price, expiry);
+		emit_option_written(option_id, &caller, amount, strike_price, premium, expiry);
 		Ok(option_id)
 	}
 
 	#[pvm_contract_macros::method]
-	pub fn exercise_option(option_id: U256) -> Result<(), Error> {
-		// Check option exists and is active.
+	pub fn buy_option(option_id: U256) -> Result<(), Error> {
+		// Check option exists and is available (listed or resale).
+		let seller = storage_get_addr(&option_slot(option_id, TAG_SELLER));
+		if seller == [0u8; 20] {
+			return Err(Error::OptionNotListed);
+		}
+		let status = storage_get_u256(&option_slot(option_id, TAG_STATUS));
+		if status != U256::from(STATUS_LISTED) && status != U256::from(STATUS_RESALE) {
+			return Err(Error::OptionNotListed);
+		}
+
+		// Check not expired.
+		let expiry = storage_get_u256(&option_slot(option_id, TAG_EXPIRY));
+		let current_time = now();
+		if current_time >= expiry {
+			return Err(Error::OptionAlreadyExpired);
+		}
+
+		let caller = caller_addr();
+
+		if status == U256::from(STATUS_LISTED) {
+			// First sale: pay premium to seller.
+			let premium = storage_get_u256(&option_slot(option_id, TAG_PREMIUM));
+			if premium > U256::ZERO {
+				let strike_raw = storage_get_raw(&option_slot(option_id, TAG_STRIKE_ASSET));
+				let s_len = asset_byte_len(&strike_raw);
+				pull_token(&strike_raw[..s_len], &caller, &seller, premium);
+			}
+		} else {
+			// Resale: pay ask price to current owner.
+			let current_buyer = storage_get_addr(&option_slot(option_id, TAG_BUYER));
+			let ask_price = storage_get_u256(&option_slot(option_id, TAG_ASK_PRICE));
+			if ask_price > U256::ZERO {
+				let strike_raw = storage_get_raw(&option_slot(option_id, TAG_STRIKE_ASSET));
+				let s_len = asset_byte_len(&strike_raw);
+				pull_token(&strike_raw[..s_len], &caller, &current_buyer, ask_price);
+			}
+			storage_clear(&option_slot(option_id, TAG_ASK_PRICE));
+		}
+
+		// Record buyer and activate.
+		storage_set_addr(&option_slot(option_id, TAG_BUYER), &caller);
+		storage_set_u256(&option_slot(option_id, TAG_STATUS), U256::from(STATUS_ACTIVE));
+
+		emit_option_bought(option_id, &caller);
+		Ok(())
+	}
+
+	#[pvm_contract_macros::method]
+	pub fn resell_option(option_id: U256, ask_price: U256) -> Result<(), Error> {
+		// Check option is active (bought).
 		let seller = storage_get_addr(&option_slot(option_id, TAG_SELLER));
 		if seller == [0u8; 20] {
 			return Err(Error::OptionNotActive);
@@ -150,6 +210,47 @@ mod covered_call {
 		let status = storage_get_u256(&option_slot(option_id, TAG_STATUS));
 		if status != U256::from(STATUS_ACTIVE) {
 			return Err(Error::OptionNotActive);
+		}
+
+		// Only the current buyer can resell.
+		let buyer = storage_get_addr(&option_slot(option_id, TAG_BUYER));
+		let caller = caller_addr();
+		if caller != buyer {
+			return Err(Error::NotOptionBuyer);
+		}
+
+		// Check not expired.
+		let expiry = storage_get_u256(&option_slot(option_id, TAG_EXPIRY));
+		let current_time = now();
+		if current_time >= expiry {
+			return Err(Error::OptionAlreadyExpired);
+		}
+
+		// List for resale.
+		storage_set_u256(&option_slot(option_id, TAG_ASK_PRICE), ask_price);
+		storage_set_u256(&option_slot(option_id, TAG_STATUS), U256::from(STATUS_RESALE));
+
+		emit_option_resale(option_id, &caller, ask_price);
+		Ok(())
+	}
+
+	#[pvm_contract_macros::method]
+	pub fn exercise_option(option_id: U256) -> Result<(), Error> {
+		// Check option exists and is active (bought).
+		let seller = storage_get_addr(&option_slot(option_id, TAG_SELLER));
+		if seller == [0u8; 20] {
+			return Err(Error::OptionNotActive);
+		}
+		let status = storage_get_u256(&option_slot(option_id, TAG_STATUS));
+		if status != U256::from(STATUS_ACTIVE) {
+			return Err(Error::OptionNotActive);
+		}
+
+		// Only the buyer can exercise.
+		let buyer = storage_get_addr(&option_slot(option_id, TAG_BUYER));
+		let caller = caller_addr();
+		if caller != buyer {
+			return Err(Error::NotOptionBuyer);
 		}
 
 		// Check not expired.
@@ -160,7 +261,6 @@ mod covered_call {
 		}
 
 		// Load option details.
-		let seller = storage_get_addr(&option_slot(option_id, TAG_SELLER));
 		let underlying_raw = storage_get_raw(&option_slot(option_id, TAG_UNDERLYING));
 		let strike_raw = storage_get_raw(&option_slot(option_id, TAG_STRIKE_ASSET));
 		let amount = storage_get_u256(&option_slot(option_id, TAG_AMOUNT));
@@ -175,8 +275,6 @@ mod covered_call {
 		if market_value <= total_cost {
 			return Err(Error::NotInTheMoney);
 		}
-
-		let caller = caller_addr();
 
 		// Buyer pays strike asset directly to seller.
 		pull_token(&strike_raw[..s_len], &caller, &seller, total_cost);
@@ -193,13 +291,16 @@ mod covered_call {
 
 	#[pvm_contract_macros::method]
 	pub fn expire_option(option_id: U256) -> Result<(), Error> {
-		// Check option exists and is active.
-		let seller_check = storage_get_addr(&option_slot(option_id, TAG_SELLER));
-		if seller_check == [0u8; 20] {
+		// Check option exists and is listed or active.
+		let seller = storage_get_addr(&option_slot(option_id, TAG_SELLER));
+		if seller == [0u8; 20] {
 			return Err(Error::OptionNotActive);
 		}
 		let status = storage_get_u256(&option_slot(option_id, TAG_STATUS));
-		if status != U256::from(STATUS_ACTIVE) {
+		if status != U256::from(STATUS_LISTED)
+			&& status != U256::from(STATUS_ACTIVE)
+			&& status != U256::from(STATUS_RESALE)
+		{
 			return Err(Error::OptionNotActive);
 		}
 
@@ -209,7 +310,6 @@ mod covered_call {
 			return Err(Error::OptionNotExpired);
 		}
 
-		let seller = storage_get_addr(&option_slot(option_id, TAG_SELLER));
 		let underlying_raw = storage_get_raw(&option_slot(option_id, TAG_UNDERLYING));
 		let amount = storage_get_u256(&option_slot(option_id, TAG_AMOUNT));
 		let u_len = asset_byte_len(&underlying_raw);
@@ -223,8 +323,11 @@ mod covered_call {
 		storage_clear(&option_slot(option_id, TAG_STRIKE_ASSET));
 		storage_clear(&option_slot(option_id, TAG_AMOUNT));
 		storage_clear(&option_slot(option_id, TAG_STRIKE_PRICE));
+		storage_clear(&option_slot(option_id, TAG_PREMIUM));
 		storage_clear(&option_slot(option_id, TAG_EXPIRY));
 		storage_clear(&option_slot(option_id, TAG_CREATED));
+		storage_clear(&option_slot(option_id, TAG_BUYER));
+		storage_clear(&option_slot(option_id, TAG_ASK_PRICE));
 		storage_clear(&option_slot(option_id, TAG_STATUS));
 
 		emit_option_expired(option_id, &seller);
@@ -234,14 +337,29 @@ mod covered_call {
 	#[pvm_contract_macros::method]
 	pub fn get_option(
 		option_id: U256,
-	) -> (pvm_contract_types::Address, Bytes, Bytes, U256, U256, U256, U256, U256) {
+	) -> (
+		pvm_contract_types::Address,
+		Bytes,
+		Bytes,
+		U256,
+		U256,
+		U256,
+		U256,
+		U256,
+		pvm_contract_types::Address,
+		U256,
+		U256,
+	) {
 		let seller = storage_get_addr(&option_slot(option_id, TAG_SELLER));
 		let underlying_raw = storage_get_raw(&option_slot(option_id, TAG_UNDERLYING));
 		let strike_raw = storage_get_raw(&option_slot(option_id, TAG_STRIKE_ASSET));
 		let amount = storage_get_u256(&option_slot(option_id, TAG_AMOUNT));
 		let strike_price = storage_get_u256(&option_slot(option_id, TAG_STRIKE_PRICE));
+		let premium = storage_get_u256(&option_slot(option_id, TAG_PREMIUM));
 		let expiry = storage_get_u256(&option_slot(option_id, TAG_EXPIRY));
 		let created = storage_get_u256(&option_slot(option_id, TAG_CREATED));
+		let buyer = storage_get_addr(&option_slot(option_id, TAG_BUYER));
+		let ask_price = storage_get_u256(&option_slot(option_id, TAG_ASK_PRICE));
 		let status = storage_get_u256(&option_slot(option_id, TAG_STATUS));
 
 		let u_len = asset_byte_len(&underlying_raw);
@@ -253,8 +371,11 @@ mod covered_call {
 			Bytes(strike_raw[..s_len].to_vec()),
 			amount,
 			strike_price,
+			premium,
 			expiry,
 			created,
+			pvm_contract_types::Address(buyer),
+			ask_price,
 			status,
 		)
 	}
@@ -534,17 +655,41 @@ mod covered_call {
 		seller: &[u8; 20],
 		amount: U256,
 		strike_price: U256,
+		premium: U256,
 		expiry: U256,
 	) {
 		let mut sig = [0u8; 32];
-		api::hash_keccak_256(b"OptionWritten(uint256,address,uint256,uint256,uint256)", &mut sig);
+		api::hash_keccak_256(
+			b"OptionWritten(uint256,address,uint256,uint256,uint256,uint256)",
+			&mut sig,
+		);
 		let t_id = enc_u256(id);
 		let mut t_seller = [0u8; 32];
 		t_seller[12..32].copy_from_slice(seller);
-		let mut data = [0u8; 96];
+		let mut data = [0u8; 128];
 		data[0..32].copy_from_slice(&enc_u256(amount));
 		data[32..64].copy_from_slice(&enc_u256(strike_price));
-		data[64..96].copy_from_slice(&enc_u256(expiry));
+		data[64..96].copy_from_slice(&enc_u256(premium));
+		data[96..128].copy_from_slice(&enc_u256(expiry));
+		api::deposit_event(&[sig, t_id, t_seller], &data);
+	}
+
+	fn emit_option_bought(id: U256, buyer: &[u8; 20]) {
+		let mut sig = [0u8; 32];
+		api::hash_keccak_256(b"OptionBought(uint256,address)", &mut sig);
+		let t_id = enc_u256(id);
+		let mut t_buyer = [0u8; 32];
+		t_buyer[12..32].copy_from_slice(buyer);
+		api::deposit_event(&[sig, t_id, t_buyer], &[]);
+	}
+
+	fn emit_option_resale(id: U256, seller: &[u8; 20], ask_price: U256) {
+		let mut sig = [0u8; 32];
+		api::hash_keccak_256(b"OptionResale(uint256,address,uint256)", &mut sig);
+		let t_id = enc_u256(id);
+		let mut t_seller = [0u8; 32];
+		t_seller[12..32].copy_from_slice(seller);
+		let data = enc_u256(ask_price);
 		api::deposit_event(&[sig, t_id, t_seller], &data);
 	}
 
@@ -592,16 +737,27 @@ mod tests {
 		mock_api::reset();
 		// Mock DEX quote returns 1000 for any query.
 		mock_api::set_call_output(&U256::from(1000u64).to_be_bytes::<32>());
-		// Set block number to 10.
 		mock_api::set_now(10);
+	}
+
+	// Helper: write_option with standard args. Premium = 20.
+	fn write_std() -> U256 {
+		write_option(
+			tsta(),
+			tstb(),
+			U256::from(100u64),
+			U256::from(5u64),
+			U256::from(20u64),
+			U256::from(50u64),
+		)
+		.unwrap()
 	}
 
 	#[test]
 	fn write_option_stores_and_returns_id() {
 		setup();
-		let result =
-			write_option(tsta(), tstb(), U256::from(100u64), U256::from(5u64), U256::from(50u64));
-		assert_eq!(result, Ok(U256::ZERO)); // First option = id 0.
+		let id = write_std();
+		assert_eq!(id, U256::ZERO);
 		assert_eq!(next_option_id(), U256::from(1u64));
 		// 1 ERC20 transferFrom to pull collateral.
 		assert_eq!(mock_api::call_count(), 1);
@@ -611,35 +767,58 @@ mod tests {
 	#[test]
 	fn write_option_increments_counter() {
 		setup();
-		let _ =
-			write_option(tsta(), tstb(), U256::from(100u64), U256::from(5u64), U256::from(50u64));
-		let result =
-			write_option(tstb(), tsta(), U256::from(200u64), U256::from(10u64), U256::from(60u64));
-		assert_eq!(result, Ok(U256::from(1u64))); // Second option = id 1.
+		let _ = write_std();
+		let id = write_option(
+			tstb(),
+			tsta(),
+			U256::from(200u64),
+			U256::from(10u64),
+			U256::from(5u64),
+			U256::from(60u64),
+		);
+		assert_eq!(id, Ok(U256::from(1u64)));
 		assert_eq!(next_option_id(), U256::from(2u64));
 	}
 
 	#[test]
 	fn write_option_rejects_zero_amount() {
 		setup();
-		let result = write_option(tsta(), tstb(), U256::ZERO, U256::from(5u64), U256::from(50u64));
+		let result = write_option(
+			tsta(),
+			tstb(),
+			U256::ZERO,
+			U256::from(5u64),
+			U256::from(20u64),
+			U256::from(50u64),
+		);
 		assert_eq!(result, Err(Error::InvalidAmount));
 	}
 
 	#[test]
 	fn write_option_rejects_zero_strike() {
 		setup();
-		let result =
-			write_option(tsta(), tstb(), U256::from(100u64), U256::ZERO, U256::from(50u64));
+		let result = write_option(
+			tsta(),
+			tstb(),
+			U256::from(100u64),
+			U256::ZERO,
+			U256::from(20u64),
+			U256::from(50u64),
+		);
 		assert_eq!(result, Err(Error::InvalidAmount));
 	}
 
 	#[test]
 	fn write_option_rejects_past_expiry() {
 		setup();
-		// Block is 10, expiry is 5.
-		let result =
-			write_option(tsta(), tstb(), U256::from(100u64), U256::from(5u64), U256::from(5u64));
+		let result = write_option(
+			tsta(),
+			tstb(),
+			U256::from(100u64),
+			U256::from(5u64),
+			U256::from(20u64),
+			U256::from(5u64),
+		);
 		assert_eq!(result, Err(Error::InvalidExpiry));
 	}
 
@@ -647,64 +826,91 @@ mod tests {
 	fn write_option_rejects_native_asset() {
 		setup();
 		let native = b(vec![0x00]);
-		let result =
-			write_option(native, tstb(), U256::from(100u64), U256::from(5u64), U256::from(50u64));
+		let result = write_option(
+			native,
+			tstb(),
+			U256::from(100u64),
+			U256::from(5u64),
+			U256::from(20u64),
+			U256::from(50u64),
+		);
 		assert_eq!(result, Err(Error::InvalidAsset));
 	}
 
 	#[test]
-	fn expire_option_returns_collateral() {
+	fn buy_option_sets_buyer_and_status() {
 		setup();
-		let _ =
-			write_option(tsta(), tstb(), U256::from(100u64), U256::from(5u64), U256::from(15u64));
-
-		// Advance block past expiry.
-		mock_api::set_now(20);
+		let id = write_std();
 		mock_api::reset_counts();
 
-		let result = expire_option(U256::ZERO);
+		let result = buy_option(id);
 		assert_eq!(result, Ok(()));
-		// 1 ERC20 transfer to return collateral.
+		// 1 transferFrom for premium payment + 1 event.
 		assert_eq!(mock_api::call_count(), 1);
 		assert_eq!(mock_api::event_count(), 1);
+
+		let (_, _, _, _, _, _, _, _, buyer, _, status) = get_option(id);
+		assert_eq!(buyer.0, [0xAA; 20]); // Mock caller.
+		assert_eq!(status, U256::from(1u64)); // Active.
 	}
 
 	#[test]
-	fn expire_option_rejects_before_expiry() {
+	fn buy_option_rejects_already_bought() {
 		setup();
-		let _ =
-			write_option(tsta(), tstb(), U256::from(100u64), U256::from(5u64), U256::from(50u64));
-		// Block is still 10, expiry is 50.
-		let result = expire_option(U256::ZERO);
-		assert_eq!(result, Err(Error::OptionNotExpired));
+		let id = write_std();
+		let _ = buy_option(id);
+
+		let result = buy_option(id);
+		assert_eq!(result, Err(Error::OptionNotListed));
 	}
 
 	#[test]
-	fn expire_option_rejects_already_expired() {
+	fn buy_option_rejects_expired() {
 		setup();
-		let _ =
-			write_option(tsta(), tstb(), U256::from(100u64), U256::from(5u64), U256::from(15u64));
+		let _ = write_option(
+			tsta(),
+			tstb(),
+			U256::from(100u64),
+			U256::from(5u64),
+			U256::from(20u64),
+			U256::from(15u64),
+		);
 		mock_api::set_now(20);
-		let _ = expire_option(U256::ZERO);
 
-		// Try again — status is now expired.
-		let result = expire_option(U256::ZERO);
-		assert_eq!(result, Err(Error::OptionNotActive));
+		let result = buy_option(U256::ZERO);
+		assert_eq!(result, Err(Error::OptionAlreadyExpired));
+	}
+
+	#[test]
+	fn buy_option_zero_premium_skips_transfer() {
+		setup();
+		let id = write_option(
+			tsta(),
+			tstb(),
+			U256::from(100u64),
+			U256::from(5u64),
+			U256::ZERO, // zero premium
+			U256::from(50u64),
+		)
+		.unwrap();
+		mock_api::reset_counts();
+
+		let result = buy_option(id);
+		assert_eq!(result, Ok(()));
+		// No transfer call for zero premium.
+		assert_eq!(mock_api::call_count(), 0);
 	}
 
 	#[test]
 	fn exercise_option_when_in_the_money() {
 		setup();
-		// Write option: amount=100, strike_price=5, expiry=50.
-		// total_cost = 5 * 100 = 500.
-		let _ =
-			write_option(tsta(), tstb(), U256::from(100u64), U256::from(5u64), U256::from(50u64));
+		let id = write_std();
+		let _ = buy_option(id);
 
-		// Mock DEX quote returns 1000 > total_cost 500 → in the money.
 		mock_api::set_call_output(&U256::from(1000u64).to_be_bytes::<32>());
 		mock_api::reset_counts();
 
-		let result = exercise_option(U256::ZERO);
+		let result = exercise_option(id);
 		assert_eq!(result, Ok(()));
 		// 1 DEX quote + 1 transferFrom (buyer pays seller) + 1 transfer (collateral to buyer) = 3.
 		assert_eq!(mock_api::call_count(), 3);
@@ -712,58 +918,209 @@ mod tests {
 	}
 
 	#[test]
+	fn exercise_option_rejects_listed_not_bought() {
+		setup();
+		let id = write_std();
+
+		let result = exercise_option(id);
+		assert_eq!(result, Err(Error::OptionNotActive));
+	}
+
+	#[test]
 	fn exercise_option_rejects_out_of_the_money() {
 		setup();
-		// Write option: amount=100, strike_price=5. total_cost = 500.
-		let _ =
-			write_option(tsta(), tstb(), U256::from(100u64), U256::from(5u64), U256::from(50u64));
+		let id = write_std();
+		let _ = buy_option(id);
 
-		// Mock DEX quote returns 400 < total_cost 500 → out of the money.
 		mock_api::set_call_output(&U256::from(400u64).to_be_bytes::<32>());
 		mock_api::reset_counts();
 
-		let result = exercise_option(U256::ZERO);
+		let result = exercise_option(id);
 		assert_eq!(result, Err(Error::NotInTheMoney));
 	}
 
 	#[test]
 	fn exercise_option_rejects_after_expiry() {
 		setup();
-		let _ =
-			write_option(tsta(), tstb(), U256::from(100u64), U256::from(5u64), U256::from(15u64));
+		let id = write_option(
+			tsta(),
+			tstb(),
+			U256::from(100u64),
+			U256::from(5u64),
+			U256::from(20u64),
+			U256::from(15u64),
+		)
+		.unwrap();
+		let _ = buy_option(id);
 		mock_api::set_now(20);
 
-		let result = exercise_option(U256::ZERO);
+		let result = exercise_option(id);
 		assert_eq!(result, Err(Error::OptionAlreadyExpired));
 	}
 
 	#[test]
 	fn exercise_option_rejects_already_exercised() {
 		setup();
-		let _ =
-			write_option(tsta(), tstb(), U256::from(100u64), U256::from(5u64), U256::from(50u64));
+		let id = write_std();
+		let _ = buy_option(id);
 		mock_api::set_call_output(&U256::from(1000u64).to_be_bytes::<32>());
-		let _ = exercise_option(U256::ZERO);
+		let _ = exercise_option(id);
 
-		let result = exercise_option(U256::ZERO);
+		let result = exercise_option(id);
+		assert_eq!(result, Err(Error::OptionNotActive));
+	}
+
+	#[test]
+	fn expire_listed_option_returns_collateral() {
+		setup();
+		let _ = write_option(
+			tsta(),
+			tstb(),
+			U256::from(100u64),
+			U256::from(5u64),
+			U256::from(20u64),
+			U256::from(15u64),
+		);
+		mock_api::set_now(20);
+		mock_api::reset_counts();
+
+		let result = expire_option(U256::ZERO);
+		assert_eq!(result, Ok(()));
+		assert_eq!(mock_api::call_count(), 1);
+		assert_eq!(mock_api::event_count(), 1);
+	}
+
+	#[test]
+	fn expire_active_option_returns_collateral() {
+		setup();
+		let id = write_option(
+			tsta(),
+			tstb(),
+			U256::from(100u64),
+			U256::from(5u64),
+			U256::from(20u64),
+			U256::from(15u64),
+		)
+		.unwrap();
+		let _ = buy_option(id);
+		mock_api::set_now(20);
+		mock_api::reset_counts();
+
+		let result = expire_option(id);
+		assert_eq!(result, Ok(()));
+		assert_eq!(mock_api::call_count(), 1);
+	}
+
+	#[test]
+	fn expire_option_rejects_before_expiry() {
+		setup();
+		let _ = write_std();
+		let result = expire_option(U256::ZERO);
+		assert_eq!(result, Err(Error::OptionNotExpired));
+	}
+
+	#[test]
+	fn expire_option_rejects_already_expired() {
+		setup();
+		let _ = write_option(
+			tsta(),
+			tstb(),
+			U256::from(100u64),
+			U256::from(5u64),
+			U256::from(20u64),
+			U256::from(15u64),
+		);
+		mock_api::set_now(20);
+		let _ = expire_option(U256::ZERO);
+
+		let result = expire_option(U256::ZERO);
 		assert_eq!(result, Err(Error::OptionNotActive));
 	}
 
 	#[test]
 	fn get_option_returns_stored_values() {
 		setup();
-		let _ =
-			write_option(tsta(), tstb(), U256::from(100u64), U256::from(5u64), U256::from(50u64));
+		let _ = write_std();
 
-		let (seller, underlying, strike_asset, amount, strike_price, expiry, created, status) =
+		let (seller, underlying, strike_asset, amount, strike_price, premium, expiry, created, buyer, ask_price, status) =
 			get_option(U256::ZERO);
-		assert_eq!(seller.0, [0xAA; 20]); // Mock caller address.
+		assert_eq!(seller.0, [0xAA; 20]);
 		assert_eq!(underlying.0, vec![0x01, 1, 0, 0, 0]);
 		assert_eq!(strike_asset.0, vec![0x01, 2, 0, 0, 0]);
 		assert_eq!(amount, U256::from(100u64));
 		assert_eq!(strike_price, U256::from(5u64));
+		assert_eq!(premium, U256::from(20u64));
 		assert_eq!(expiry, U256::from(50u64));
-		assert_eq!(created, U256::from(10u64)); // Mock timestamp at setup.
-		assert_eq!(status, U256::ZERO); // Active.
+		assert_eq!(created, U256::from(10u64));
+		assert_eq!(buyer.0, [0u8; 20]); // No buyer yet.
+		assert_eq!(ask_price, U256::ZERO);
+		assert_eq!(status, U256::ZERO); // Listed.
+	}
+
+	#[test]
+	fn resell_option_sets_ask_and_status() {
+		setup();
+		let id = write_std();
+		let _ = buy_option(id);
+		mock_api::reset_counts();
+
+		let result = resell_option(id, U256::from(50u64));
+		assert_eq!(result, Ok(()));
+		assert_eq!(mock_api::event_count(), 1);
+
+		let (_, _, _, _, _, _, _, _, _, ask_price, status) = get_option(id);
+		assert_eq!(ask_price, U256::from(50u64));
+		assert_eq!(status, U256::from(4u64)); // Resale.
+	}
+
+	#[test]
+	fn resell_option_rejects_if_not_buyer() {
+		setup();
+		let id = write_std();
+		// Option is listed, not bought — no buyer to resell.
+		let result = resell_option(id, U256::from(50u64));
+		assert_eq!(result, Err(Error::OptionNotActive));
+	}
+
+	#[test]
+	fn buy_resale_option() {
+		setup();
+		let id = write_std();
+		let _ = buy_option(id);
+		let _ = resell_option(id, U256::from(50u64));
+		mock_api::reset_counts();
+
+		// Buy the resale — pays ask price to current owner.
+		let result = buy_option(id);
+		assert_eq!(result, Ok(()));
+		// 1 transferFrom for ask price payment + 1 event.
+		assert_eq!(mock_api::call_count(), 1);
+		assert_eq!(mock_api::event_count(), 1);
+
+		let (_, _, _, _, _, _, _, _, _, ask_price, status) = get_option(id);
+		assert_eq!(status, U256::from(1u64)); // Active again.
+		assert_eq!(ask_price, U256::ZERO); // Ask price cleared.
+	}
+
+	#[test]
+	fn expire_resale_option_returns_collateral() {
+		setup();
+		let id = write_option(
+			tsta(),
+			tstb(),
+			U256::from(100u64),
+			U256::from(5u64),
+			U256::from(20u64),
+			U256::from(15u64),
+		)
+		.unwrap();
+		let _ = buy_option(id);
+		let _ = resell_option(id, U256::from(50u64));
+		mock_api::set_now(20);
+		mock_api::reset_counts();
+
+		let result = expire_option(id);
+		assert_eq!(result, Ok(()));
+		assert_eq!(mock_api::call_count(), 1);
 	}
 }

@@ -18,10 +18,12 @@ const assetOptions: { key: AssetKey; label: string }[] = [
 ];
 
 const coveredCallAbi = parseAbi([
-	"function writeOption(bytes underlying, bytes strikeAsset, uint256 amount, uint256 strikePrice, uint256 expiry) external returns (uint256)",
+	"function writeOption(bytes underlying, bytes strikeAsset, uint256 amount, uint256 strikePrice, uint256 premium, uint256 expiry) external returns (uint256)",
+	"function buyOption(uint256 optionId) external",
 	"function exerciseOption(uint256 optionId) external",
 	"function expireOption(uint256 optionId) external",
-	"function getOption(uint256 optionId) external view returns (address seller, bytes underlying, bytes strikeAsset, uint256 amount, uint256 strikePrice, uint256 expiry, uint256 created, uint256 status)",
+	"function getOption(uint256 optionId) external view returns (address seller, bytes underlying, bytes strikeAsset, uint256 amount, uint256 strikePrice, uint256 premium, uint256 expiry, uint256 created, address buyer, uint256 askPrice, uint256 status)",
+	"function resellOption(uint256 optionId, uint256 askPrice) external",
 	"function nextOptionId() external view returns (uint256)",
 ]);
 
@@ -40,15 +42,19 @@ const ERC20_ADDRESSES: Record<string, Hex> = {
 };
 
 const STATUS_LABELS: Record<number, string> = {
-	0: "Active",
-	1: "Exercised",
-	2: "Expired",
+	0: "Listed",
+	1: "Active",
+	2: "Exercised",
+	3: "Expired",
+	4: "For Sale",
 };
 
 const STATUS_COLORS: Record<number, string> = {
-	0: "text-green-400",
-	1: "text-blue-400",
-	2: "text-text-secondary",
+	0: "text-yellow-400",
+	1: "text-green-400",
+	2: "text-blue-400",
+	3: "text-text-secondary",
+	4: "text-orange-400",
 };
 
 type OptionData = {
@@ -58,8 +64,11 @@ type OptionData = {
 	strikeAsset: AssetKey | "unknown";
 	amount: bigint;
 	strikePrice: bigint;
+	premium: bigint;
 	expiry: bigint;
 	created: bigint;
+	buyer: string;
+	askPrice: bigint;
 	status: number;
 };
 
@@ -123,13 +132,13 @@ export default function OptionsPage() {
 	const [strikeAsset, setStrikeAsset] = useState<AssetKey>("testB");
 	const [amount, setAmount] = useState("1000000000000");
 	const [strikePrice, setStrikePrice] = useState("1");
+	const [premium, setPremium] = useState("100");
 	const [expiryMinutes, setExpiryMinutes] = useState("10");
 
 	// Options list
 	const [options, setOptions] = useState<OptionData[]>([]);
+	const [resellAskPrice, setResellAskPrice] = useState("100");
 
-	// Exercise/expire input
-	const [targetOptionId, setTargetOptionId] = useState("0");
 
 	const account = evmDevAccounts[accountIdx].account;
 
@@ -165,10 +174,13 @@ export default function OptionsPage() {
 						strikeBytes,
 						amt,
 						strike,
+						prem,
 						expiry,
 						created,
+						buyerAddr,
+						ask,
 						stat,
-					] = result as [string, string, string, bigint, bigint, bigint, bigint, bigint];
+					] = result as [string, string, string, bigint, bigint, bigint, bigint, bigint, string, bigint, bigint];
 					opts.push({
 						id: BigInt(i),
 						seller,
@@ -176,8 +188,11 @@ export default function OptionsPage() {
 						strikeAsset: decodeAssetKey(strikeBytes),
 						amount: amt,
 						strikePrice: strike,
+						premium: prem,
 						expiry,
 						created,
+						buyer: buyerAddr,
+						askPrice: ask,
 						status: Number(stat),
 					});
 				} catch {
@@ -247,6 +262,7 @@ export default function OptionsPage() {
 					ASSETS[strikeAsset].encoded,
 					BigInt(amount),
 					BigInt(strikePrice),
+					BigInt(premium),
 					expiryTimestamp,
 				],
 				gas: 5_000_000n,
@@ -276,18 +292,71 @@ export default function OptionsPage() {
 		}
 	};
 
-	const doExercise = async () => {
+	const doBuyOption = async (opt: OptionData) => {
 		if (!connected || !contractAddress) return report("Not connected or no contract", true);
 		setLoading(true);
 		try {
 			const wallet = await getWalletClient(accountIdx, ethRpcUrl);
 			const pub_ = getPublicClient(ethRpcUrl);
 			const addr = contractAddress as Hex;
-			const optId = BigInt(targetOptionId);
 
-			// Find the option to know what strike asset to approve
-			const opt = options.find((o) => o.id === optId);
-			if (opt && opt.strikeAsset !== "unknown") {
+			// Approve the contract to pull premium (denominated in strike asset)
+			if (opt.premium > 0n && opt.strikeAsset !== "unknown") {
+				const erc20 = ERC20_ADDRESSES[opt.strikeAsset];
+				if (erc20) {
+					const approveHash = await wallet.writeContract({
+						address: erc20,
+						abi: erc20Abi,
+						functionName: "approve",
+						args: [addr as Hex, opt.premium],
+						gas: 5_000_000n,
+					});
+					await pub_.waitForTransactionReceipt({ hash: approveHash, timeout: 30_000 });
+				}
+			}
+
+			const hash = await wallet.writeContract({
+				address: addr,
+				abi: coveredCallAbi,
+				functionName: "buyOption",
+				args: [opt.id],
+				gas: 5_000_000n,
+			});
+			const receipt = await pub_.waitForTransactionReceipt({ hash, timeout: 60_000 });
+			if (receipt.status === "reverted") {
+				let reason = "unknown";
+				try {
+					const tx = await pub_.getTransaction({ hash });
+					await pub_.call({
+						to: tx.to!,
+						data: tx.input,
+						account: tx.from,
+						gas: tx.gas,
+						blockNumber: receipt.blockNumber,
+					});
+				} catch (replayErr) {
+					reason = extractReason(replayErr);
+				}
+				report(`Buy reverted: ${reason}`, true);
+			} else {
+				report(`Option #${opt.id.toString()} bought in block ${receipt.blockNumber}`);
+			}
+			fetchOptions();
+		} catch (e: unknown) {
+			report(`Buy failed: ${extractReason(e)}`, true);
+		}
+	};
+
+	const doExerciseOption = async (opt: OptionData) => {
+		if (!connected || !contractAddress) return report("Not connected or no contract", true);
+		setLoading(true);
+		try {
+			const wallet = await getWalletClient(accountIdx, ethRpcUrl);
+			const pub_ = getPublicClient(ethRpcUrl);
+			const addr = contractAddress as Hex;
+
+			// Approve the contract to pull strike asset from buyer
+			if (opt.strikeAsset !== "unknown") {
 				const erc20 = ERC20_ADDRESSES[opt.strikeAsset];
 				const totalCost = opt.strikePrice * opt.amount;
 				if (erc20 && totalCost > 0n) {
@@ -306,7 +375,7 @@ export default function OptionsPage() {
 				address: addr,
 				abi: coveredCallAbi,
 				functionName: "exerciseOption",
-				args: [optId],
+				args: [opt.id],
 				gas: 5_000_000n,
 			});
 			const receipt = await pub_.waitForTransactionReceipt({ hash, timeout: 60_000 });
@@ -326,7 +395,7 @@ export default function OptionsPage() {
 				}
 				report(`Exercise reverted: ${reason}`, true);
 			} else {
-				report(`Option ${targetOptionId} exercised in block ${receipt.blockNumber}`);
+				report(`Option #${opt.id.toString()} exercised in block ${receipt.blockNumber}`);
 			}
 			fetchOptions();
 		} catch (e: unknown) {
@@ -334,7 +403,7 @@ export default function OptionsPage() {
 		}
 	};
 
-	const doExpire = async () => {
+	const doExpireOption = async (opt: OptionData) => {
 		if (!connected || !contractAddress) return report("Not connected or no contract", true);
 		setLoading(true);
 		try {
@@ -346,7 +415,7 @@ export default function OptionsPage() {
 				address: addr,
 				abi: coveredCallAbi,
 				functionName: "expireOption",
-				args: [BigInt(targetOptionId)],
+				args: [opt.id],
 				gas: 5_000_000n,
 			});
 			const receipt = await pub_.waitForTransactionReceipt({ hash, timeout: 60_000 });
@@ -366,13 +435,63 @@ export default function OptionsPage() {
 				}
 				report(`Expire reverted: ${reason}`, true);
 			} else {
-				report(`Option ${targetOptionId} expired in block ${receipt.blockNumber}`);
+				report(`Option #${opt.id.toString()} expired in block ${receipt.blockNumber}`);
 			}
 			fetchOptions();
 		} catch (e: unknown) {
 			report(`Expire failed: ${extractReason(e)}`, true);
 		}
 	};
+
+	const doResellOption = async (opt: OptionData, askPrice: string) => {
+		if (!connected || !contractAddress) return report("Not connected or no contract", true);
+		setLoading(true);
+		try {
+			const wallet = await getWalletClient(accountIdx, ethRpcUrl);
+			const pub_ = getPublicClient(ethRpcUrl);
+			const addr = contractAddress as Hex;
+
+			const hash = await wallet.writeContract({
+				address: addr,
+				abi: coveredCallAbi,
+				functionName: "resellOption",
+				args: [opt.id, BigInt(askPrice)],
+				gas: 5_000_000n,
+			});
+			const receipt = await pub_.waitForTransactionReceipt({ hash, timeout: 60_000 });
+			if (receipt.status === "reverted") {
+				let reason = "unknown";
+				try {
+					const tx = await pub_.getTransaction({ hash });
+					await pub_.call({
+						to: tx.to!,
+						data: tx.input,
+						account: tx.from,
+						gas: tx.gas,
+						blockNumber: receipt.blockNumber,
+					});
+				} catch (replayErr) {
+					reason = extractReason(replayErr);
+				}
+				report(`Resell reverted: ${reason}`, true);
+			} else {
+				report(`Option #${opt.id.toString()} listed for resale in block ${receipt.blockNumber}`);
+			}
+			fetchOptions();
+		} catch (e: unknown) {
+			report(`Resell failed: ${extractReason(e)}`, true);
+		}
+	};
+
+	const listedOptions = options.filter((o) => o.status === 0 || o.status === 4);
+	const activeOptions = options.filter((o) => o.status === 1);
+	const settledOptions = options.filter((o) => o.status === 2 || o.status === 3);
+	const isExpired = (opt: OptionData) =>
+		blockTimestamp !== null && blockTimestamp >= opt.expiry;
+	const isSeller = (opt: OptionData) =>
+		opt.seller.toLowerCase() === account.address.toLowerCase();
+	const isBuyer = (opt: OptionData) =>
+		opt.buyer.toLowerCase() === account.address.toLowerCase();
 
 	return (
 		<div className="space-y-6">
@@ -477,7 +596,7 @@ export default function OptionsPage() {
 						</select>
 					</div>
 				</div>
-				<div className="grid grid-cols-3 gap-3 mt-3">
+				<div className="grid grid-cols-2 gap-3 mt-3">
 					<div>
 						<label className="block text-xs font-medium text-text-secondary mb-1">
 							Amount (raw units)
@@ -498,6 +617,19 @@ export default function OptionsPage() {
 							className="w-full rounded-lg border border-white/[0.08] bg-white/[0.04] px-3 py-2 text-sm font-mono"
 							value={strikePrice}
 							onChange={(e) => setStrikePrice(e.target.value)}
+						/>
+					</div>
+				</div>
+				<div className="grid grid-cols-2 gap-3 mt-3">
+					<div>
+						<label className="block text-xs font-medium text-text-secondary mb-1">
+							Premium (strike asset)
+						</label>
+						<input
+							type="text"
+							className="w-full rounded-lg border border-white/[0.08] bg-white/[0.04] px-3 py-2 text-sm font-mono"
+							value={premium}
+							onChange={(e) => setPremium(e.target.value)}
 						/>
 					</div>
 					<div>
@@ -523,49 +655,233 @@ export default function OptionsPage() {
 				</div>
 			</div>
 
-			{/* Exercise / Expire */}
-			<div className="card">
-				<h2 className="text-lg font-semibold font-display mb-4">Exercise / Expire</h2>
-				<div className="flex gap-3 items-end">
-					<div className="flex-1">
-						<label className="block text-xs font-medium text-text-secondary mb-1">
-							Option ID
-						</label>
-						<input
-							type="text"
-							className="w-full rounded-lg border border-white/[0.08] bg-white/[0.04] px-3 py-2 text-sm font-mono"
-							value={targetOptionId}
-							onChange={(e) => setTargetOptionId(e.target.value)}
-						/>
-					</div>
-					<button
-						className="btn-primary"
-						onClick={doExercise}
-						disabled={loading || !contractAddress}
-					>
-						Exercise
-					</button>
-					<button
-						className="btn-secondary"
-						onClick={doExpire}
-						disabled={loading || !contractAddress}
-					>
-						Expire
-					</button>
-				</div>
-			</div>
-
-			{/* Options List */}
-			{options.length > 0 && (
+			{/* Orderbook — listed options available to buy */}
+			{listedOptions.length > 0 && (
 				<div className="card">
 					<h2 className="text-lg font-semibold font-display mb-4">
-						Options ({options.length})
+						Orderbook ({listedOptions.length})
 					</h2>
 					<div className="space-y-2">
-						{options.map((opt) => (
+						{listedOptions.map((opt) => {
+							const expired = isExpired(opt);
+							const mine = isSeller(opt);
+							const isResale = opt.status === 4;
+							const buyPrice = isResale ? opt.askPrice : opt.premium;
+
+							return (
+								<div
+									key={opt.id.toString()}
+									className={`rounded-lg border px-4 py-3 ${
+										expired
+											? "border-yellow-500/20 bg-yellow-500/[0.04]"
+											: "border-white/[0.08] bg-white/[0.04]"
+									}`}
+								>
+									<div className="flex justify-between items-center mb-1">
+										<span className="text-sm font-semibold">
+											#{opt.id.toString()} — {assetLabel(opt.underlying)} →{" "}
+											{assetLabel(opt.strikeAsset)}
+										</span>
+										<div className="flex items-center gap-2">
+											{mine && (
+												<span className="text-[10px] px-1.5 py-0.5 rounded bg-white/[0.06] text-text-secondary">
+													yours
+												</span>
+											)}
+											{expired ? (
+												<span className="text-xs font-medium text-yellow-400">
+													Expired
+												</span>
+											) : (
+												<span
+													className={`text-xs font-medium ${isResale ? "text-orange-400" : "text-yellow-400"}`}
+												>
+													{isResale ? "Resale" : "Listed"}
+												</span>
+											)}
+										</div>
+									</div>
+									<div className="text-xs font-mono text-text-secondary">
+										Amount: {opt.amount.toString()} | Strike:{" "}
+										{opt.strikePrice.toString()} |{" "}
+										{isResale ? "Ask" : "Premium"}:{" "}
+										{buyPrice.toString()} {assetLabel(opt.strikeAsset)}
+									</div>
+									<div className="text-xs font-mono text-text-secondary">
+										Created:{" "}
+										{new Date(Number(opt.created) * 1000).toLocaleString()}
+										{debug && (
+											<span className="ml-1 text-yellow-400/70">
+												({opt.created.toString()}s)
+											</span>
+										)}{" "}
+										| Expires:{" "}
+										{new Date(Number(opt.expiry) * 1000).toLocaleString()}
+										{debug && (
+											<span className="ml-1 text-yellow-400/70">
+												({opt.expiry.toString()}s)
+											</span>
+										)}
+									</div>
+									<div className="text-[10px] font-mono text-text-secondary mt-1">
+										Seller: {opt.seller}
+									</div>
+									<div className="mt-2 flex gap-2">
+										{!expired && !mine && (
+											<button
+												className="btn-primary text-xs px-3 py-1"
+												onClick={() => doBuyOption(opt)}
+												disabled={loading}
+											>
+												Buy
+											</button>
+										)}
+										{expired && mine && (
+											<button
+												className="btn-secondary text-xs px-3 py-1"
+												onClick={() => doExpireOption(opt)}
+												disabled={loading}
+											>
+												Reclaim Collateral
+											</button>
+										)}
+										{expired && !mine && (
+											<span className="text-xs text-text-secondary italic">
+												Awaiting seller to reclaim
+											</span>
+										)}
+									</div>
+								</div>
+							);
+						})}
+					</div>
+				</div>
+			)}
+
+			{/* Active options — bought, can be exercised */}
+			{activeOptions.length > 0 && (
+				<div className="card">
+					<h2 className="text-lg font-semibold font-display mb-4">
+						Active Options ({activeOptions.length})
+					</h2>
+					<div className="space-y-2">
+						{activeOptions.map((opt) => {
+							const totalCost = opt.strikePrice * opt.amount;
+							const expired = isExpired(opt);
+							const mine = isBuyer(opt);
+							const seller = isSeller(opt);
+
+							return (
+								<div
+									key={opt.id.toString()}
+									className={`rounded-lg border px-4 py-3 ${
+										expired
+											? "border-yellow-500/20 bg-yellow-500/[0.04]"
+											: "border-green-500/20 bg-green-500/[0.04]"
+									}`}
+								>
+									<div className="flex justify-between items-center mb-1">
+										<span className="text-sm font-semibold">
+											#{opt.id.toString()} — {assetLabel(opt.underlying)} →{" "}
+											{assetLabel(opt.strikeAsset)}
+										</span>
+										<div className="flex items-center gap-2">
+											{mine && (
+												<span className="text-[10px] px-1.5 py-0.5 rounded bg-green-500/10 text-green-400">
+													buyer
+												</span>
+											)}
+											{seller && (
+												<span className="text-[10px] px-1.5 py-0.5 rounded bg-white/[0.06] text-text-secondary">
+													seller
+												</span>
+											)}
+											{expired ? (
+												<span className="text-xs font-medium text-yellow-400">
+													Expired
+												</span>
+											) : (
+												<span className="text-xs font-medium text-green-400">
+													Active
+												</span>
+											)}
+										</div>
+									</div>
+									<div className="text-xs font-mono text-text-secondary">
+										Amount: {opt.amount.toString()} | Strike:{" "}
+										{opt.strikePrice.toString()} | Exercise cost:{" "}
+										{totalCost.toString()} {assetLabel(opt.strikeAsset)}
+									</div>
+									<div className="text-xs font-mono text-text-secondary">
+										Expires:{" "}
+										{new Date(Number(opt.expiry) * 1000).toLocaleString()}
+										{debug && (
+											<span className="ml-1 text-yellow-400/70">
+												({opt.expiry.toString()}s)
+											</span>
+										)}
+									</div>
+									<div className="text-[10px] font-mono text-text-secondary mt-1">
+										Seller: {opt.seller} | Buyer: {opt.buyer}
+									</div>
+									<div className="mt-2 flex gap-2 items-center">
+										{!expired && mine && (
+											<>
+												<button
+													className="btn-primary text-xs px-3 py-1"
+													onClick={() => doExerciseOption(opt)}
+													disabled={loading}
+												>
+													Exercise
+												</button>
+												<input
+													type="text"
+													className="w-24 rounded-lg border border-white/[0.08] bg-white/[0.04] px-2 py-1 text-xs font-mono"
+													value={resellAskPrice}
+													onChange={(e) =>
+														setResellAskPrice(e.target.value)
+													}
+													placeholder="Ask price"
+												/>
+												<button
+													className="btn-secondary text-xs px-3 py-1"
+													onClick={() =>
+														doResellOption(opt, resellAskPrice)
+													}
+													disabled={loading}
+												>
+													Resell
+												</button>
+											</>
+										)}
+										{expired && seller && (
+											<button
+												className="btn-secondary text-xs px-3 py-1"
+												onClick={() => doExpireOption(opt)}
+												disabled={loading}
+											>
+												Reclaim Collateral
+											</button>
+										)}
+									</div>
+								</div>
+							);
+						})}
+					</div>
+				</div>
+			)}
+
+			{/* History — settled options */}
+			{settledOptions.length > 0 && (
+				<div className="card">
+					<h2 className="text-lg font-semibold font-display mb-4">
+						History ({settledOptions.length})
+					</h2>
+					<div className="space-y-2">
+						{settledOptions.map((opt) => (
 							<div
 								key={opt.id.toString()}
-								className="rounded-lg border border-white/[0.08] bg-white/[0.04] px-4 py-3"
+								className="rounded-lg border border-white/[0.08] bg-white/[0.04] px-4 py-3 opacity-60"
 							>
 								<div className="flex justify-between items-center mb-1">
 									<span className="text-sm font-semibold">
@@ -581,21 +897,6 @@ export default function OptionsPage() {
 								<div className="text-xs font-mono text-text-secondary">
 									Amount: {opt.amount.toString()} | Strike:{" "}
 									{opt.strikePrice.toString()}
-								</div>
-								<div className="text-xs font-mono text-text-secondary">
-									Created: {new Date(Number(opt.created) * 1000).toLocaleString()}
-									{debug && (
-										<span className="ml-1 text-yellow-400/70">
-											({opt.created.toString()}s)
-										</span>
-									)}{" "}
-									| Expires:{" "}
-									{new Date(Number(opt.expiry) * 1000).toLocaleString()}
-									{debug && (
-										<span className="ml-1 text-yellow-400/70">
-											({opt.expiry.toString()}s)
-										</span>
-									)}
 								</div>
 								<div className="text-[10px] font-mono text-text-secondary mt-1">
 									Seller: {opt.seller}
