@@ -22,7 +22,7 @@ default_command = "polkadot"
   prometheus_port = 9618
 
 [[parachains]]
-id = 1000
+id = 5187
 chain = "./chain_spec.json"
 cumulus_based = true
 

@@ -115,12 +115,14 @@ fn local_testnet_genesis() -> Value {
 fn eth_dev_accounts() -> Vec<AccountId> {
 	use sp_core::crypto::AccountId32;
 	[
-		// Alith
+		// Alith (Alice EVM)
 		hex_literal::hex!("f24ff3a9cf04c71dbc94d0b566f7a27b94566caceeeeeeeeeeeeeeeeeeeeeeee"),
-		// Baltathar
+		// Baltathar (Bob EVM)
 		hex_literal::hex!("3cd0a705a2dc65e5b1e1205896baa2be8a07c6e0eeeeeeeeeeeeeeeeeeeeeeee"),
-		// Charleth
+		// Charleth (old Moonbeam-style)
 		hex_literal::hex!("798d4ba9baf0064ec19eb4f0a1a45785ae9d6dfceeeeeeeeeeeeeeeeeeeeeeee"),
+		// Charlie (Substrate dev key EVM)
+		hex_literal::hex!("6f0b38b28cd0d6db363c9b7bd4ec67d1626e17faeeeeeeeeeeeeeeeeeeeeeeee"),
 	]
 	.into_iter()
 	.map(AccountId32::from)

@@ -395,7 +395,7 @@ generate_chain_spec() {
         --chain-id "polkadot-stack-template" \
         -t development \
         --relay-chain rococo-local \
-        --para-id 1000 \
+        --para-id 5187 \
         --runtime "$RUNTIME_WASM" \
         named-preset development
 }
