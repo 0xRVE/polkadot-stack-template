@@ -139,7 +139,6 @@ export default function OptionsPage() {
 	const [options, setOptions] = useState<OptionData[]>([]);
 	const [resellAskPrice, setResellAskPrice] = useState("100");
 
-
 	const account = evmDevAccounts[accountIdx].account;
 
 	const report = (msg: string, err = false) => {
@@ -180,7 +179,19 @@ export default function OptionsPage() {
 						buyerAddr,
 						ask,
 						stat,
-					] = result as [string, string, string, bigint, bigint, bigint, bigint, bigint, string, bigint, bigint];
+					] = result as [
+						string,
+						string,
+						string,
+						bigint,
+						bigint,
+						bigint,
+						bigint,
+						bigint,
+						string,
+						bigint,
+						bigint,
+					];
 					opts.push({
 						id: BigInt(i),
 						seller,
@@ -475,7 +486,9 @@ export default function OptionsPage() {
 				}
 				report(`Resell reverted: ${reason}`, true);
 			} else {
-				report(`Option #${opt.id.toString()} listed for resale in block ${receipt.blockNumber}`);
+				report(
+					`Option #${opt.id.toString()} listed for resale in block ${receipt.blockNumber}`,
+				);
 			}
 			fetchOptions();
 		} catch (e: unknown) {
@@ -486,12 +499,10 @@ export default function OptionsPage() {
 	const listedOptions = options.filter((o) => o.status === 0 || o.status === 4);
 	const activeOptions = options.filter((o) => o.status === 1);
 	const settledOptions = options.filter((o) => o.status === 2 || o.status === 3);
-	const isExpired = (opt: OptionData) =>
-		blockTimestamp !== null && blockTimestamp >= opt.expiry;
+	const isExpired = (opt: OptionData) => blockTimestamp !== null && blockTimestamp >= opt.expiry;
 	const isSeller = (opt: OptionData) =>
 		opt.seller.toLowerCase() === account.address.toLowerCase();
-	const isBuyer = (opt: OptionData) =>
-		opt.buyer.toLowerCase() === account.address.toLowerCase();
+	const isBuyer = (opt: OptionData) => opt.buyer.toLowerCase() === account.address.toLowerCase();
 
 	return (
 		<div className="space-y-6">
@@ -714,8 +725,8 @@ export default function OptionsPage() {
 									<div className="text-xs font-mono text-text-secondary">
 										Amount: {opt.amount.toString()} | Strike:{" "}
 										{opt.strikePrice.toString()} |{" "}
-										{isResale ? "Ask" : "Premium"}:{" "}
-										{buyPrice.toString()} {assetLabel(opt.strikeAsset)}
+										{isResale ? "Ask" : "Premium"}: {buyPrice.toString()}{" "}
+										{assetLabel(opt.strikeAsset)}
 									</div>
 									<div className="text-xs font-mono text-text-secondary">
 										Created:{" "}
