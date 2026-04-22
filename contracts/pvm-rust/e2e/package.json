@@ -1,7 +1,7 @@
 {
   "name": "dex-router-e2e",
   "version": "0.1.0",
-  "description": "End-to-end tests for the Rust PVM DexRouter contract",
+  "description": "End-to-end tests for the Rust PVM contracts",
   "private": true,
   "engines": {
     "node": ">=22 <23",
@@ -9,6 +9,9 @@
   },
   "scripts": {
     "test": "npx hardhat test --network local",
+    "test:dex": "npx hardhat test test/DexRouter.test.ts --network local",
+    "test:covered-call": "npx hardhat test test/CoveredCall.test.ts --network local",
+    "deploy:covered-call": "npx hardhat run scripts/deploy-covered-call.ts --network local",
     "fmt": "prettier --write 'test/**/*.ts' hardhat.config.ts",
     "fmt:check": "prettier --check 'test/**/*.ts' hardhat.config.ts"
   },

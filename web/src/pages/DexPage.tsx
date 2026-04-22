@@ -625,6 +625,13 @@ export default function DexPage() {
 					<div className="flex gap-2">
 						<button
 							className="text-xs text-text-secondary hover:text-text-primary"
+							onClick={() => setSwapPath((prev) => [...prev].reverse())}
+							title="Flip direction"
+						>
+							&#x21C5; Flip
+						</button>
+						<button
+							className="text-xs text-text-secondary hover:text-text-primary"
 							onClick={addSwapHop}
 							disabled={swapPath.length >= 4}
 						>
@@ -754,8 +761,8 @@ export default function DexPage() {
 					</div>
 				)}
 
-				<div className="grid grid-cols-2 gap-3">
-					<div>
+				<div className="flex items-end gap-2">
+					<div className="flex-1">
 						<label className="block text-xs font-medium text-text-secondary mb-1">
 							Asset 1
 						</label>
@@ -773,7 +780,19 @@ export default function DexPage() {
 								))}
 						</select>
 					</div>
-					<div>
+					<button
+						className="shrink-0 mb-0.5 px-2 py-2 rounded-lg border border-white/[0.08] bg-white/[0.04] text-sm text-text-secondary hover:text-text-primary"
+						onClick={() => {
+							setPoolAsset1(poolAsset2);
+							setPoolAsset2(poolAsset1);
+							setPoolAmount1(poolAmount2);
+							setPoolAmount2(poolAmount1);
+						}}
+						title="Flip assets"
+					>
+						&#x21C5;
+					</button>
+					<div className="flex-1">
 						<label className="block text-xs font-medium text-text-secondary mb-1">
 							Asset 2
 						</label>

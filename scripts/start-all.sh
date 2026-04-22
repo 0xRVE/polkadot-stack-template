@@ -66,6 +66,10 @@ echo "  Deploying ProofOfExistence via PVM (resolc)..."
 cd "$ROOT_DIR/contracts/pvm"
 npm run deploy:local
 
+echo "  Deploying CoveredCall via PVM (Rust)..."
+cd "$ROOT_DIR/contracts/pvm-rust/e2e"
+npm run deploy:covered-call
+
 cd "$ROOT_DIR"
 
 echo "[7/8] Building CLI..."

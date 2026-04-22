@@ -15,6 +15,7 @@ export default function App() {
 		{ path: "/evm", label: "EVM PoE", enabled: pallets.revive === true },
 		{ path: "/pvm", label: "PVM PoE", enabled: pallets.revive === true },
 		{ path: "/dex", label: "DEX", enabled: pallets.revive === true },
+		{ path: "/options", label: "Options", enabled: pallets.revive === true },
 		{ path: "/statements", label: "Statements", enabled: true },
 		{ path: "/accounts", label: "Accounts", enabled: true },
 	];
