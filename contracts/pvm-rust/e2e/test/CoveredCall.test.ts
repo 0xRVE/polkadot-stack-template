@@ -187,7 +187,9 @@ async function expectTxReverts(
 		// writeContract threw during simulation — verify it's the expected error
 		const msg = (e as Error).message;
 		if (msg.includes("execution reverted") && !msg.includes(errorName)) {
-			expect.fail(`reverted with wrong error: expected ${errorName}, got: ${msg.slice(0, 300)}`);
+			expect.fail(
+				`reverted with wrong error: expected ${errorName}, got: ${msg.slice(0, 300)}`,
+			);
 		}
 		return;
 	}
@@ -640,6 +642,93 @@ describe("CoveredCall (PVM-Rust)", function () {
 					args: [optionId],
 				},
 				"OptionNotActive",
+			);
+		});
+
+		it("rejects exercise by non-buyer", async function () {
+			// Write and buy an option as Alice (deployer)
+			await waitForNextBlock();
+			const chainNow = await getChainTimestamp();
+
+			await sendWithRetry("writeOption (for non-buyer test)", () =>
+				cc.write.writeOption(
+					[ASSETS.testA, ASSETS.testB, 100_000n, 1n, 0n, chainNow + 600n],
+					{ gas: 5_000_000n },
+				),
+			);
+			const optionId = (await cc.read.nextOptionId()) - 1n;
+
+			await waitForNextBlock();
+			await sendWithRetry("buyOption (as Alice)", () =>
+				cc.write.buyOption([optionId], { gas: 5_000_000n }),
+			);
+
+			// Bob (not the buyer) tries to exercise
+			const bob = await getWalletClientByIndex(1);
+			await approveERC20As(1, ERC20_TSTB, contractAddress, 100_000_000_000_000n);
+			await waitForNextBlock();
+			await expectTxReverts(
+				bob,
+				{ address: contractAddress, functionName: "exerciseOption", args: [optionId] },
+				"NotOptionBuyer",
+			);
+		});
+
+		it("rejects resell by non-buyer", async function () {
+			// Write and buy an option as Alice (deployer)
+			await waitForNextBlock();
+			const chainNow = await getChainTimestamp();
+
+			await sendWithRetry("writeOption (for non-reseller test)", () =>
+				cc.write.writeOption(
+					[ASSETS.testA, ASSETS.testB, 100_000n, 1n, 0n, chainNow + 600n],
+					{ gas: 5_000_000n },
+				),
+			);
+			const optionId = (await cc.read.nextOptionId()) - 1n;
+
+			await waitForNextBlock();
+			await sendWithRetry("buyOption (as Alice)", () =>
+				cc.write.buyOption([optionId], { gas: 5_000_000n }),
+			);
+
+			// Bob (not the buyer) tries to resell
+			const bob = await getWalletClientByIndex(1);
+			await waitForNextBlock();
+			await expectTxReverts(
+				bob,
+				{ address: contractAddress, functionName: "resellOption", args: [optionId, 100n] },
+				"NotOptionBuyer",
+			);
+		});
+
+		it("rejects exercise after expiry", async function () {
+			// Write an option with enough time to buy, then wait for expiry
+			await waitForNextBlock();
+			const chainNow = await getChainTimestamp();
+			const expiry = chainNow + 30n; // 30s — enough to buy, then expires
+
+			await sendWithRetry("writeOption (for expired-exercise test)", () =>
+				cc.write.writeOption([ASSETS.testA, ASSETS.testB, 100_000n, 1n, 0n, expiry], {
+					gas: 5_000_000n,
+				}),
+			);
+			const optionId = (await cc.read.nextOptionId()) - 1n;
+
+			await waitForNextBlock();
+			await sendWithRetry("buyOption", () =>
+				cc.write.buyOption([optionId], { gas: 5_000_000n }),
+			);
+
+			// Wait for expiry to pass (~30s from chainNow, ~20s remaining after buy)
+			for (let i = 0; i < 12; i++) {
+				await waitForNextBlock();
+			}
+
+			await expectTxReverts(
+				deployer,
+				{ address: contractAddress, functionName: "exerciseOption", args: [optionId] },
+				"OptionAlreadyExpired",
 			);
 		});
 	});
