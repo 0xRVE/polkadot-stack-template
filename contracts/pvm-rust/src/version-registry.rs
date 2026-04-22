@@ -48,6 +48,7 @@ mod version_registry {
 		NotOwner,
 		InvalidAddress,
 		VersionNotFound,
+		StorageError,
 		UnknownSelector,
 	}
 
@@ -57,6 +58,7 @@ mod version_registry {
 				Error::NotOwner => b"NotOwner",
 				Error::InvalidAddress => b"InvalidAddress",
 				Error::VersionNotFound => b"VersionNotFound",
+				Error::StorageError => b"StorageError",
 				Error::UnknownSelector => b"UnknownSelector",
 			}
 		}
@@ -101,6 +103,8 @@ mod version_registry {
 		Ok(version)
 	}
 
+	// TODO: switch to two-step ownership transfer (transfer + accept) to prevent
+	// irrecoverable loss if transferred to the wrong address.
 	#[pvm_contract_macros::method]
 	pub fn transfer_ownership(new_owner: pvm_contract_types::Address) -> Result<(), Error> {
 		let caller = caller_addr();
@@ -116,6 +120,9 @@ mod version_registry {
 		emit_ownership_transferred(&caller, &new_owner.0);
 		Ok(())
 	}
+
+	// TODO: add deprecateVersion(bytes32 name, uint256 version) to zero out a
+	// buggy implementation address. Currently registered versions are permanent.
 
 	#[pvm_contract_macros::method]
 	pub fn latest(name: U256) -> pvm_contract_types::Address {
@@ -154,6 +161,10 @@ mod version_registry {
 
 	// ── Helpers ──────────────────────────────────────────────────────────
 
+	fn revert(err: Error) -> ! {
+		api::return_value(ReturnFlags::REVERT, err.as_ref());
+	}
+
 	fn caller_addr() -> [u8; 20] {
 		let mut buf = [0u8; 20];
 		api::caller(&mut buf);
@@ -184,7 +195,10 @@ mod version_registry {
 	fn storage_get_u256(key: &[u8; 32]) -> U256 {
 		let mut buf = [0u8; 32];
 		let mut out = &mut buf[..];
-		let _ = api::get_storage(StorageFlags::empty(), key, &mut out);
+		match api::get_storage(StorageFlags::empty(), key, &mut out) {
+			Ok(()) | Err(pallet_revive_uapi::ReturnErrorCode::KeyNotFound) => {}
+			Err(_) => revert(Error::StorageError),
+		}
 		U256::from_be_bytes::<32>(buf)
 	}
 
@@ -195,7 +209,10 @@ mod version_registry {
 	fn storage_get_addr(key: &[u8; 32]) -> [u8; 20] {
 		let mut buf = [0u8; 32];
 		let mut out = &mut buf[..];
-		let _ = api::get_storage(StorageFlags::empty(), key, &mut out);
+		match api::get_storage(StorageFlags::empty(), key, &mut out) {
+			Ok(()) | Err(pallet_revive_uapi::ReturnErrorCode::KeyNotFound) => {}
+			Err(_) => revert(Error::UnknownSelector),
+		}
 		let mut addr = [0u8; 20];
 		addr.copy_from_slice(&buf[12..32]);
 		addr
@@ -207,18 +224,12 @@ mod version_registry {
 		api::set_storage(StorageFlags::empty(), key, &buf);
 	}
 
-	fn enc_u256(v: U256) -> [u8; 32] {
-		v.to_be_bytes::<32>()
-	}
-
 	fn emit_version_registered(name: U256, version: U256, implementation: &[u8; 20]) {
 		let mut sig = [0u8; 32];
 		api::hash_keccak_256(b"VersionRegistered(bytes32,uint256,address)", &mut sig);
-		let t_name = enc_u256(name);
-		let t_version = enc_u256(version);
 		let mut t_impl = [0u8; 32];
 		t_impl[12..32].copy_from_slice(implementation);
-		api::deposit_event(&[sig, t_name, t_version, t_impl], &[]);
+		api::deposit_event(&[sig, name.to_be_bytes::<32>(), version.to_be_bytes::<32>(), t_impl], &[]);
 	}
 
 	fn emit_ownership_transferred(prev: &[u8; 20], new: &[u8; 20]) {

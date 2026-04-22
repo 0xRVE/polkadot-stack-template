@@ -35,6 +35,9 @@ ruint = { version = "1.17", default-features = false }
 [features]
 abi-gen = []
 
+[dev-dependencies]
+sha3 = "0.10"
+
 [build-dependencies]
 cargo-pvm-contract-builder = { git = "https://github.com/paritytech/cargo-pvm-contract", rev = "586425ca" }
 

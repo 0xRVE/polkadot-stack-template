@@ -24,13 +24,14 @@ interface IVersionRegistry {
     error NotOwner();
     error InvalidAddress();
     error VersionNotFound();
+    error StorageError();
     error UnknownSelector();
 
     // --- Write Functions ---
 
     /// @notice Register a new implementation for a named contract.
     ///         Auto-increments the version counter for that name.
-    /// @param name The contract family identifier (e.g. bytes32("covered-call"))
+    /// @param name The contract family identifier (e.g. keccak256("covered-call"))
     /// @param implementation The deployed contract address
     /// @return version The assigned version number (1-indexed)
     function registerVersion(bytes32 name, address implementation) external returns (uint256 version);

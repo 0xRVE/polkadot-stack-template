@@ -18,6 +18,7 @@ const registryAbi = parseAbi([
 	"error NotOwner()",
 	"error InvalidAddress()",
 	"error VersionNotFound()",
+	"error StorageError()",
 	"error UnknownSelector()",
 ]);
 
@@ -110,6 +111,14 @@ async function expectTxReverts(
 		} as any);
 	} catch (e: unknown) {
 		const msg = (e as Error).message;
+		const isRevert =
+			msg.includes("execution reverted") ||
+			msg.includes("ContractTrapped") ||
+			msg.includes("revert") ||
+			msg.includes("unknown RPC error");
+		if (!isRevert) {
+			expect.fail(`expected a revert error, got non-revert: ${msg.slice(0, 300)}`);
+		}
 		if (msg.includes("execution reverted") && !msg.includes(errorName)) {
 			expect.fail(
 				`reverted with wrong error: expected ${errorName}, got: ${msg.slice(0, 300)}`,
@@ -132,6 +141,13 @@ const ZERO_ADDR = "0x0000000000000000000000000000000000000000" as Hex;
 
 // ---------------------------------------------------------------------------
 // Tests
+//
+// State flow (single deploy, tests run sequentially and mutate shared state):
+//   Deployment:      owner = Alice, no versions
+//   Register:        covered-call v1 (IMPL_CC_V1), v2 (IMPL_CC_V2); futures v1 (IMPL_FUT_V1)
+//   Edge cases:      covered-call v3 (duplicate IMPL_CC_V1); transfer-to-self (no-op)
+//   Transfer:        ownership → Bob; Bob registers covered-call v4 (IMPL_CC_V1)
+//   Fallback:        unknown selector reverts
 // ---------------------------------------------------------------------------
 
 describe("VersionRegistry (PVM-Rust)", function () {

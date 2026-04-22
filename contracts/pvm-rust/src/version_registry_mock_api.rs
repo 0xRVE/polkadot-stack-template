@@ -1,5 +1,6 @@
 use pallet_revive_uapi::{CallFlags, ReturnErrorCode, ReturnFlags, StorageFlags};
-use std::{collections::HashMap, sync::Mutex};
+use std::cell::RefCell;
+use std::collections::HashMap;
 
 struct State {
 	caller_addr: [u8; 20],
@@ -8,17 +9,17 @@ struct State {
 	storage: HashMap<[u8; 32], [u8; 32]>,
 }
 
-static STATE: Mutex<Option<State>> = Mutex::new(None);
-
-fn with_state<R>(f: impl FnOnce(&mut State) -> R) -> R {
-	let mut guard = STATE.lock().unwrap();
-	let state = guard.get_or_insert_with(|| State {
+thread_local! {
+	static STATE: RefCell<State> = RefCell::new(State {
 		caller_addr: [0xAA; 20],
 		self_addr: [0xBB; 20],
 		event_count: 0,
 		storage: HashMap::new(),
 	});
-	f(state)
+}
+
+fn with_state<R>(f: impl FnOnce(&mut State) -> R) -> R {
+	STATE.with(|s| f(&mut s.borrow_mut()))
 }
 
 pub enum MockApi {}
@@ -39,13 +40,9 @@ impl MockApi {
 	}
 
 	pub fn hash_keccak_256(input: &[u8], output: &mut [u8; 32]) {
-		let mut h: u64 = 0xcbf29ce484222325;
-		for &b in input {
-			h ^= b as u64;
-			h = h.wrapping_mul(0x100000001b3);
-		}
-		output.fill(0);
-		output[..8].copy_from_slice(&h.to_be_bytes());
+		use sha3::{Digest, Keccak256};
+		let result = Keccak256::digest(input);
+		output.copy_from_slice(&result);
 	}
 
 	pub fn call(
