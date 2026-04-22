@@ -812,7 +812,7 @@ describe("CoveredCall (PVM-Rust)", function () {
 					{ gas: 5_000_000n },
 				),
 			);
-			
+
 			const optionId = (await cc.read.nextOptionId()) - 1n;
 
 			for (let i = 0; i < 8; i++) {
