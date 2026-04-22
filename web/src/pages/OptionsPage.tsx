@@ -558,8 +558,8 @@ export default function OptionsPage() {
 			{/* Write Option */}
 			<div className="card">
 				<h2 className="text-lg font-semibold font-display mb-4">Write Option</h2>
-				<div className="grid grid-cols-2 gap-3">
-					<div>
+				<div className="flex items-end gap-2">
+					<div className="flex-1">
 						<label className="block text-xs font-medium text-text-secondary mb-1">
 							Underlying (collateral)
 						</label>
@@ -577,7 +577,17 @@ export default function OptionsPage() {
 								))}
 						</select>
 					</div>
-					<div>
+					<button
+						className="shrink-0 mb-0.5 px-2 py-2 rounded-lg border border-white/[0.08] bg-white/[0.04] text-sm text-text-secondary hover:text-text-primary"
+						onClick={() => {
+							setUnderlying(strikeAsset);
+							setStrikeAsset(underlying);
+						}}
+						title="Flip assets"
+					>
+						&#x21C5;
+					</button>
+					<div className="flex-1">
 						<label className="block text-xs font-medium text-text-secondary mb-1">
 							Strike Asset (payment)
 						</label>
