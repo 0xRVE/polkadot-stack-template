@@ -682,7 +682,7 @@ start_local_node_background() {
         --tmp \
         --alice \
         --force-authoring \
-        --dev-block-time 3000 \
+        --dev-block-time ${STACK_DEV_BLOCK_TIME:-3000} \
         --no-prometheus \
         --unsafe-force-node-key-generation \
         --rpc-cors all \
@@ -702,7 +702,7 @@ run_local_node_foreground() {
         --tmp \
         --alice \
         --force-authoring \
-        --dev-block-time 3000 \
+        --dev-block-time ${STACK_DEV_BLOCK_TIME:-3000} \
         --no-prometheus \
         --unsafe-force-node-key-generation \
         --rpc-cors all \

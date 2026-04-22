@@ -39,6 +39,11 @@ interface ICoveredCall {
         address indexed seller
     );
 
+    event OptionCancelled(
+        uint256 indexed optionId,
+        address indexed seller
+    );
+
     // --- Errors ---
 
     error PrecompileCallFailed();
@@ -48,6 +53,7 @@ interface ICoveredCall {
     error OptionNotExpired();
     error OptionAlreadyExpired();
     error NotOptionBuyer();
+    error UnauthorizedCancel();
     error NotInTheMoney();
     error InvalidAsset();
     error InvalidAmount();
@@ -81,6 +87,11 @@ interface ICoveredCall {
     /// @param optionId The option to resell
     /// @param askPrice Price in strike asset that the next buyer must pay
     function resellOption(uint256 optionId, uint256 askPrice) external;
+
+    /// @notice Cancel a listed option that hasn't been bought yet.
+    ///         Only the seller can cancel. Returns collateral to seller.
+    /// @param optionId The option to cancel
+    function cancelOption(uint256 optionId) external;
 
     /// @notice Exercise an active option before expiry. Only the buyer can exercise.
     ///         Buyer pays strikePrice * amount of the strike asset directly to the

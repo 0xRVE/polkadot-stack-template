@@ -68,6 +68,7 @@ mod covered_call {
 		OptionNotExpired,
 		OptionAlreadyExpired,
 		NotOptionBuyer,
+		UnauthorizedCancel,
 		NotInTheMoney,
 		InvalidAsset,
 		InvalidAmount,
@@ -85,6 +86,7 @@ mod covered_call {
 				Error::OptionNotExpired => b"OptionNotExpired",
 				Error::OptionAlreadyExpired => b"OptionAlreadyExpired",
 				Error::NotOptionBuyer => b"NotOptionBuyer",
+				Error::UnauthorizedCancel => b"UnauthorizedCancel",
 				Error::NotInTheMoney => b"NotInTheMoney",
 				Error::InvalidAsset => b"InvalidAsset",
 				Error::InvalidAmount => b"InvalidAmount",
@@ -231,6 +233,48 @@ mod covered_call {
 		storage_set_u256(&option_slot(option_id, TAG_STATUS), U256::from(STATUS_RESALE));
 
 		emit_option_resale(option_id, &caller, ask_price);
+		Ok(())
+	}
+
+	#[pvm_contract_macros::method]
+	pub fn cancel_option(option_id: U256) -> Result<(), Error> {
+		// Check option exists.
+		let seller = storage_get_addr(&option_slot(option_id, TAG_SELLER));
+		if seller == [0u8; 20] {
+			return Err(Error::OptionNotActive);
+		}
+		// Only listed options can be cancelled — once bought, the seller is committed.
+		let status = storage_get_u256(&option_slot(option_id, TAG_STATUS));
+		if status != U256::from(STATUS_LISTED) {
+			return Err(Error::OptionNotListed);
+		}
+		// Only the seller can cancel.
+		let caller = caller_addr();
+		if caller != seller {
+			return Err(Error::UnauthorizedCancel);
+		}
+
+		let underlying_raw = storage_get_raw(&option_slot(option_id, TAG_UNDERLYING));
+		let amount = storage_get_u256(&option_slot(option_id, TAG_AMOUNT));
+		let u_len = asset_byte_len(&underlying_raw);
+
+		// Return collateral to seller.
+		push_token(&underlying_raw[..u_len], &seller, amount);
+
+		// Clear storage.
+		storage_clear(&option_slot(option_id, TAG_SELLER));
+		storage_clear(&option_slot(option_id, TAG_UNDERLYING));
+		storage_clear(&option_slot(option_id, TAG_STRIKE_ASSET));
+		storage_clear(&option_slot(option_id, TAG_AMOUNT));
+		storage_clear(&option_slot(option_id, TAG_STRIKE_PRICE));
+		storage_clear(&option_slot(option_id, TAG_PREMIUM));
+		storage_clear(&option_slot(option_id, TAG_EXPIRY));
+		storage_clear(&option_slot(option_id, TAG_CREATED));
+		storage_clear(&option_slot(option_id, TAG_BUYER));
+		storage_clear(&option_slot(option_id, TAG_ASK_PRICE));
+		storage_clear(&option_slot(option_id, TAG_STATUS));
+
+		emit_option_cancelled(option_id, &caller);
 		Ok(())
 	}
 
@@ -705,6 +749,15 @@ mod covered_call {
 	fn emit_option_expired(id: U256, seller: &[u8; 20]) {
 		let mut sig = [0u8; 32];
 		api::hash_keccak_256(b"OptionExpired(uint256,address)", &mut sig);
+		let t_id = enc_u256(id);
+		let mut t_seller = [0u8; 32];
+		t_seller[12..32].copy_from_slice(seller);
+		api::deposit_event(&[sig, t_id, t_seller], &[]);
+	}
+
+	fn emit_option_cancelled(id: U256, seller: &[u8; 20]) {
+		let mut sig = [0u8; 32];
+		api::hash_keccak_256(b"OptionCancelled(uint256,address)", &mut sig);
 		let t_id = enc_u256(id);
 		let mut t_seller = [0u8; 32];
 		t_seller[12..32].copy_from_slice(seller);
