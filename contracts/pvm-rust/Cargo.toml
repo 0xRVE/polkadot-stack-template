@@ -15,6 +15,10 @@ path = "src/dex-router.rs"
 name = "covered-call"
 path = "src/covered-call.rs"
 
+[[bin]]
+name = "version-registry"
+path = "src/version-registry.rs"
+
 [lib]
 name = "dex_router_encoding"
 path = "src/encoding.rs"
