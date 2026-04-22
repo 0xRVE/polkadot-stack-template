@@ -297,9 +297,9 @@ mod covered_call {
 			return Err(Error::OptionNotActive);
 		}
 		let status = storage_get_u256(&option_slot(option_id, TAG_STATUS));
-		if status != U256::from(STATUS_LISTED)
-			&& status != U256::from(STATUS_ACTIVE)
-			&& status != U256::from(STATUS_RESALE)
+		if status != U256::from(STATUS_LISTED) &&
+			status != U256::from(STATUS_ACTIVE) &&
+			status != U256::from(STATUS_RESALE)
 		{
 			return Err(Error::OptionNotActive);
 		}
@@ -1042,8 +1042,19 @@ mod tests {
 		setup();
 		let _ = write_std();
 
-		let (seller, underlying, strike_asset, amount, strike_price, premium, expiry, created, buyer, ask_price, status) =
-			get_option(U256::ZERO);
+		let (
+			seller,
+			underlying,
+			strike_asset,
+			amount,
+			strike_price,
+			premium,
+			expiry,
+			created,
+			buyer,
+			ask_price,
+			status,
+		) = get_option(U256::ZERO);
 		assert_eq!(seller.0, [0xAA; 20]);
 		assert_eq!(underlying.0, vec![0x01, 1, 0, 0, 0]);
 		assert_eq!(strike_asset.0, vec![0x01, 2, 0, 0, 0]);
