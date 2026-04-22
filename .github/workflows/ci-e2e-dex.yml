@@ -51,7 +51,7 @@ jobs:
         run: cargo build -p stack-template-runtime --release
 
       # -- Build PVM contracts --
-      - name: Build PVM contracts (DexRouter + CoveredCall)
+      - name: Build PVM contracts (DexRouter + CoveredCall + VersionRegistry)
         working-directory: contracts/pvm-rust
         run: RUSTUP_TOOLCHAIN=nightly cargo build --release
 
@@ -142,9 +142,17 @@ jobs:
         working-directory: contracts/pvm-rust/e2e
         run: npm ci
 
-      - name: Run PVM contract e2e tests (DexRouter + CoveredCall)
+      - name: E2E — DexRouter
         working-directory: contracts/pvm-rust/e2e
-        run: npm test
+        run: npm run test:dex
+
+      - name: E2E — CoveredCall
+        working-directory: contracts/pvm-rust/e2e
+        run: npm run test:covered-call
+
+      - name: E2E — VersionRegistry
+        working-directory: contracts/pvm-rust/e2e
+        run: npm run test:registry
 
       # -- Diagnostics & cleanup --
       - name: Upload node logs
