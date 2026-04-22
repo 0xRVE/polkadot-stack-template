@@ -130,6 +130,7 @@ mod version_registry {
 		if count == U256::ZERO {
 			return pvm_contract_types::Address([0u8; 20]);
 		}
+
 		let addr = storage_get_addr(&name_version_slot(name, count, TAG_ADDRESS));
 		pvm_contract_types::Address(addr)
 	}
