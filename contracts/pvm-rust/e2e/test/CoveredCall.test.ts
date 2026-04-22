@@ -843,7 +843,11 @@ describe("CoveredCall (PVM-Rust)", function () {
 			// value. This test verifies that either way, no tokens are actually moved.
 			const charlie = await getWalletClientByIndex(2);
 			const chainNow = await getChainTimestamp();
-			const hugeAmount = 999_999_999_999_999_999n;
+
+			await waitForNextBlock();
+			const charlieBalance = await getERC20Balance(ERC20_TSTA, CHARLIE_ADDR);
+			// Use an amount that always exceeds Charlie's actual balance
+			const hugeAmount = charlieBalance + 1n;
 
 			try {
 				await sendWithRetry("approve[2] for edge case", () =>
