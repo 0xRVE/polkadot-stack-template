@@ -288,13 +288,14 @@ describe("VersionRegistry (PVM-Rust)", function () {
 			);
 		});
 
-		it("rejects version beyond count", async function () {
+		it("rejects version at exact boundary (count + 1)", async function () {
+			const count = await registry.read.versionCount([NAME_COVERED_CALL]);
 			await expectTxReverts(
 				deployer,
 				{
 					address: registryAddress,
 					functionName: "getVersion",
-					args: [NAME_COVERED_CALL, 999n],
+					args: [NAME_COVERED_CALL, (count as bigint) + 1n],
 				},
 				"VersionNotFound",
 			);
@@ -311,6 +312,40 @@ describe("VersionRegistry (PVM-Rust)", function () {
 				},
 				"VersionNotFound",
 			);
+		});
+	});
+
+	describe("Edge cases", function () {
+		it("allows registering the same implementation address as a new version", async function () {
+			await waitForNextBlock();
+			const countBefore = (await registry.read.versionCount([NAME_COVERED_CALL])) as bigint;
+
+			await sendWithRetry("registerVersion (duplicate addr)", () =>
+				registry.write.registerVersion([NAME_COVERED_CALL, IMPL_CC_V1], {
+					gas: 5_000_000n,
+				}),
+			);
+
+			const countAfter = (await registry.read.versionCount([NAME_COVERED_CALL])) as bigint;
+			expect(countAfter).to.equal(countBefore + 1n);
+
+			// Both the old and new version point to the same address
+			const oldV = await registry.read.getVersion([NAME_COVERED_CALL, 1n]);
+			const newV = await registry.read.getVersion([NAME_COVERED_CALL, countAfter]);
+			expect((oldV as string).toLowerCase()).to.equal(IMPL_CC_V1.toLowerCase());
+			expect((newV as string).toLowerCase()).to.equal(IMPL_CC_V1.toLowerCase());
+		});
+
+		it("allows transferring ownership to self (no-op)", async function () {
+			await waitForNextBlock();
+			await sendWithRetry("transferOwnership (to self)", () =>
+				registry.write.transferOwnership([deployer.account.address], {
+					gas: 5_000_000n,
+				}),
+			);
+
+			const o = await registry.read.owner();
+			expect((o as string).toLowerCase()).to.equal(deployer.account.address.toLowerCase());
 		});
 	});
 
@@ -356,6 +391,20 @@ describe("VersionRegistry (PVM-Rust)", function () {
 			const bob = clients[1];
 			const publicClient = await hre.viem.getPublicClient();
 
+			// Verify Bob is blocked BEFORE transfer (self-contained, no order dependency)
+			await waitForNextBlock();
+			await expectTxReverts(
+				bob,
+				{
+					address: registryAddress,
+					functionName: "registerVersion",
+					args: [NAME_COVERED_CALL, IMPL_CC_V1],
+				},
+				"NotOwner",
+			);
+
+			const countBefore = (await registry.read.versionCount([NAME_COVERED_CALL])) as bigint;
+
 			await waitForNextBlock();
 			await sendWithRetry("transferOwnership", () =>
 				registry.write.transferOwnership([bob.account.address], {
@@ -390,8 +439,12 @@ describe("VersionRegistry (PVM-Rust)", function () {
 					gas: 5_000_000n,
 				}),
 			);
-			const count = await registry.read.versionCount([NAME_COVERED_CALL]);
-			expect(count).to.equal(3n); // 2 from before + 1 from new owner
+			const countAfter = (await registry.read.versionCount([NAME_COVERED_CALL])) as bigint;
+			expect(countAfter).to.equal(countBefore + 1n);
+
+			// latest() updated correctly after new owner's registration
+			const lat = await registry.read.latest([NAME_COVERED_CALL]);
+			expect((lat as string).toLowerCase()).to.equal(IMPL_CC_V1.toLowerCase());
 		});
 	});
 
@@ -404,7 +457,14 @@ describe("VersionRegistry (PVM-Rust)", function () {
 					to: registryAddress,
 					data: "0xdeadbeef" as Hex,
 				});
-			} catch {
+			} catch (e: unknown) {
+				// Only accept revert-like errors, not network/encoding errors
+				const msg = (e as Error).message;
+				expect(
+					msg.includes("revert") ||
+						msg.includes("ContractTrapped") ||
+						msg.includes("unknown RPC error"),
+				).to.equal(true, `expected revert error, got: ${msg.slice(0, 200)}`);
 				return;
 			}
 			const receipt = await publicClient.waitForTransactionReceipt({
