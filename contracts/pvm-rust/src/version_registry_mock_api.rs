@@ -1,6 +1,5 @@
 use pallet_revive_uapi::{CallFlags, ReturnErrorCode, ReturnFlags, StorageFlags};
-use std::cell::RefCell;
-use std::collections::HashMap;
+use std::{cell::RefCell, collections::HashMap};
 
 struct State {
 	caller_addr: [u8; 20],

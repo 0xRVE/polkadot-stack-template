@@ -196,7 +196,7 @@ mod version_registry {
 		let mut buf = [0u8; 32];
 		let mut out = &mut buf[..];
 		match api::get_storage(StorageFlags::empty(), key, &mut out) {
-			Ok(()) | Err(pallet_revive_uapi::ReturnErrorCode::KeyNotFound) => {}
+			Ok(()) | Err(pallet_revive_uapi::ReturnErrorCode::KeyNotFound) => {},
 			Err(_) => revert(Error::StorageError),
 		}
 		U256::from_be_bytes::<32>(buf)
@@ -210,7 +210,7 @@ mod version_registry {
 		let mut buf = [0u8; 32];
 		let mut out = &mut buf[..];
 		match api::get_storage(StorageFlags::empty(), key, &mut out) {
-			Ok(()) | Err(pallet_revive_uapi::ReturnErrorCode::KeyNotFound) => {}
+			Ok(()) | Err(pallet_revive_uapi::ReturnErrorCode::KeyNotFound) => {},
 			Err(_) => revert(Error::UnknownSelector),
 		}
 		let mut addr = [0u8; 20];
@@ -229,7 +229,10 @@ mod version_registry {
 		api::hash_keccak_256(b"VersionRegistered(bytes32,uint256,address)", &mut sig);
 		let mut t_impl = [0u8; 32];
 		t_impl[12..32].copy_from_slice(implementation);
-		api::deposit_event(&[sig, name.to_be_bytes::<32>(), version.to_be_bytes::<32>(), t_impl], &[]);
+		api::deposit_event(
+			&[sig, name.to_be_bytes::<32>(), version.to_be_bytes::<32>(), t_impl],
+			&[],
+		);
 	}
 
 	fn emit_ownership_transferred(prev: &[u8; 20], new: &[u8; 20]) {
