@@ -154,6 +154,11 @@ jobs:
         working-directory: contracts/pvm-rust/e2e
         run: npm run test:registry
 
+      # Catch-all: run all tests to catch any new test files not listed above
+      - name: E2E — All (catch-all)
+        working-directory: contracts/pvm-rust/e2e
+        run: npm test
+
       # -- Diagnostics & cleanup --
       - name: Upload node logs
         if: failure()

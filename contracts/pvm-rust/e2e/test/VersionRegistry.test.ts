@@ -68,7 +68,10 @@ async function sendWithRetry(
 			return receipt;
 		} catch (e: unknown) {
 			const msg = (e as Error).message;
-			if (attempt < maxAttempts && (msg.includes("Timed out") || msg.includes("Priority"))) {
+			if (
+				attempt < maxAttempts &&
+				(msg.includes("Timed out") || msg.includes("Priority is too low"))
+			) {
 				console.log(`        ⚠️  ${label} attempt ${attempt} failed: ${msg.slice(0, 100)}`);
 				await waitForNextBlock();
 				continue;
@@ -114,8 +117,7 @@ async function expectTxReverts(
 		const isRevert =
 			msg.includes("execution reverted") ||
 			msg.includes("ContractTrapped") ||
-			msg.includes("revert") ||
-			msg.includes("unknown RPC error");
+			msg.includes("revert");
 		if (!isRevert) {
 			expect.fail(`expected a revert error, got non-revert: ${msg.slice(0, 300)}`);
 		}
@@ -137,6 +139,7 @@ async function expectTxReverts(
 const IMPL_CC_V1 = "0x1111111111111111111111111111111111111111" as Hex;
 const IMPL_CC_V2 = "0x2222222222222222222222222222222222222222" as Hex;
 const IMPL_FUT_V1 = "0x3333333333333333333333333333333333333333" as Hex;
+const IMPL_CC_V4 = "0x4444444444444444444444444444444444444444" as Hex; // Bob's post-transfer registration
 const ZERO_ADDR = "0x0000000000000000000000000000000000000000" as Hex;
 
 // ---------------------------------------------------------------------------
@@ -146,7 +149,7 @@ const ZERO_ADDR = "0x0000000000000000000000000000000000000000" as Hex;
 //   Deployment:      owner = Alice, no versions
 //   Register:        covered-call v1 (IMPL_CC_V1), v2 (IMPL_CC_V2); futures v1 (IMPL_FUT_V1)
 //   Edge cases:      covered-call v3 (duplicate IMPL_CC_V1); transfer-to-self (no-op)
-//   Transfer:        ownership → Bob; Bob registers covered-call v4 (IMPL_CC_V1)
+//   Transfer:        ownership → Bob; Bob registers covered-call v4 (IMPL_CC_V4)
 //   Fallback:        unknown selector reverts
 // ---------------------------------------------------------------------------
 
@@ -451,7 +454,7 @@ describe("VersionRegistry (PVM-Rust)", function () {
 			});
 			await waitForNextBlock();
 			await sendWithRetry("registerVersion (new owner)", () =>
-				(bobRegistry as any).write.registerVersion([NAME_COVERED_CALL, IMPL_CC_V1], {
+				(bobRegistry as any).write.registerVersion([NAME_COVERED_CALL, IMPL_CC_V4], {
 					gas: 5_000_000n,
 				}),
 			);
@@ -460,7 +463,7 @@ describe("VersionRegistry (PVM-Rust)", function () {
 
 			// latest() updated correctly after new owner's registration
 			const lat = await registry.read.latest([NAME_COVERED_CALL]);
-			expect((lat as string).toLowerCase()).to.equal(IMPL_CC_V1.toLowerCase());
+			expect((lat as string).toLowerCase()).to.equal(IMPL_CC_V4.toLowerCase());
 		});
 	});
 

@@ -92,7 +92,10 @@ mod version_registry {
 		// Increment per-name version counter (1-indexed).
 		let count_key = name_slot(name, TAG_COUNT);
 		let count = storage_get_u256(&count_key);
-		let version = count + U256::from(1);
+		let version = count.checked_add(U256::from(1)).unwrap_or(U256::ZERO);
+		if version == U256::ZERO {
+			return Err(Error::StorageError);
+		}
 		storage_set_u256(&count_key, version);
 
 		// Store implementation address.
@@ -103,8 +106,11 @@ mod version_registry {
 		Ok(version)
 	}
 
-	// TODO: switch to two-step ownership transfer (transfer + accept) to prevent
-	// irrecoverable loss if transferred to the wrong address.
+	// WARNING: single-step ownership transfer. Transferring to the wrong address
+	// permanently bricks the registry — no new versions can be registered for any
+	// contract family. All downstream contracts calling latest() are frozen.
+	// TODO(production): implement two-step transfer (transferOwnership sets
+	// pendingOwner, acceptOwnership called by new owner to finalize).
 	#[pvm_contract_macros::method]
 	pub fn transfer_ownership(new_owner: pvm_contract_types::Address) -> Result<(), Error> {
 		let caller = caller_addr();
@@ -121,8 +127,10 @@ mod version_registry {
 		Ok(())
 	}
 
-	// TODO: add deprecateVersion(bytes32 name, uint256 version) to zero out a
-	// buggy implementation address. Currently registered versions are permanent.
+	// TODO(production): add deprecateVersion(bytes32 name, uint256 version) to zero
+	// out a buggy implementation. Currently registered versions are permanent —
+	// getVersion(name, N) returns the buggy address forever. Callers that cache
+	// specific versions (not latest()) remain exposed. Accepted risk for PBA stage.
 
 	#[pvm_contract_macros::method]
 	pub fn latest(name: U256) -> pvm_contract_types::Address {
@@ -212,7 +220,7 @@ mod version_registry {
 		let mut out = &mut buf[..];
 		match api::get_storage(StorageFlags::empty(), key, &mut out) {
 			Ok(()) | Err(pallet_revive_uapi::ReturnErrorCode::KeyNotFound) => {},
-			Err(_) => revert(Error::UnknownSelector),
+			Err(_) => revert(Error::StorageError),
 		}
 		let mut addr = [0u8; 20];
 		addr.copy_from_slice(&buf[12..32]);
@@ -394,16 +402,85 @@ mod tests {
 	}
 
 	#[test]
-	fn emits_events() {
+	fn emits_version_registered_event_with_correct_topics() {
+		mock_api::reset();
+		new().unwrap();
+		let n = name_covered_call();
+
+		register_version(n, addr(0x11)).unwrap();
+		assert_eq!(mock_api::event_count(), 1);
+
+		let topics = mock_api::event_topics(0);
+		assert_eq!(topics.len(), 4); // sig, name, version, impl
+
+		// topic[0] = keccak of event signature
+		let expected_sig = mock_api::keccak256(b"VersionRegistered(bytes32,uint256,address)");
+		assert_eq!(topics[0], expected_sig);
+
+		// topic[1] = name
+		assert_eq!(topics[1], n.to_be_bytes::<32>());
+
+		// topic[2] = version (1)
+		assert_eq!(topics[2], U256::from(1).to_be_bytes::<32>());
+
+		// topic[3] = implementation address (right-padded)
+		let mut expected_addr = [0u8; 32];
+		expected_addr[12..32].copy_from_slice(&[0x11; 20]);
+		assert_eq!(topics[3], expected_addr);
+	}
+
+	#[test]
+	fn emits_ownership_transferred_event_with_correct_topics() {
 		mock_api::reset();
 		new().unwrap();
 
-		assert_eq!(mock_api::event_count(), 0);
-		register_version(name_covered_call(), addr(0x11)).unwrap();
+		let new_owner = [0xDD; 20];
+		transfer_ownership(pvm_contract_types::Address(new_owner)).unwrap();
 		assert_eq!(mock_api::event_count(), 1);
-		register_version(name_futures(), addr(0x22)).unwrap();
-		assert_eq!(mock_api::event_count(), 2);
-		transfer_ownership(pvm_contract_types::Address([0xDD; 20])).unwrap();
-		assert_eq!(mock_api::event_count(), 3);
+
+		let topics = mock_api::event_topics(0);
+		assert_eq!(topics.len(), 3); // sig, prev, new
+
+		let expected_sig = mock_api::keccak256(b"OwnershipTransferred(address,address)");
+		assert_eq!(topics[0], expected_sig);
+
+		let mut expected_prev = [0u8; 32];
+		expected_prev[12..32].copy_from_slice(&[0xAA; 20]); // default caller
+		assert_eq!(topics[1], expected_prev);
+
+		let mut expected_new = [0u8; 32];
+		expected_new[12..32].copy_from_slice(&new_owner);
+		assert_eq!(topics[2], expected_new);
+	}
+
+	#[test]
+	fn fallback_returns_unknown_selector() {
+		mock_api::reset();
+		new().unwrap();
+		assert_eq!(fallback(), Err(Error::UnknownSelector));
+	}
+
+	#[test]
+	#[should_panic(expected = "contract reverted")]
+	fn storage_get_addr_reverts_on_unexpected_storage_error() {
+		mock_api::reset();
+		new().unwrap();
+		mock_api::set_storage_error(true);
+		// owner() calls storage_get_addr which hits the StorageError revert path
+		owner();
+	}
+
+	#[test]
+	fn register_and_retrieve_with_keccak_derived_name() {
+		mock_api::reset();
+		new().unwrap();
+
+		// Use a realistic keccak-derived name like the e2e tests do.
+		let name = U256::from_be_bytes::<32>(mock_api::keccak256(b"covered-call"));
+
+		let v1 = register_version(name, addr(0x11)).unwrap();
+		assert_eq!(v1, U256::from(1));
+		assert_eq!(latest(name).0, [0x11; 20]);
+		assert_eq!(get_version(name, U256::from(1)).unwrap().0, [0x11; 20]);
 	}
 }

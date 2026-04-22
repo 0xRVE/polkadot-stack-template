@@ -1,19 +1,26 @@
 use pallet_revive_uapi::{CallFlags, ReturnErrorCode, ReturnFlags, StorageFlags};
 use std::{cell::RefCell, collections::HashMap};
 
+struct Event {
+	topics: Vec<[u8; 32]>,
+	data: Vec<u8>,
+}
+
 struct State {
 	caller_addr: [u8; 20],
 	self_addr: [u8; 20],
-	event_count: u32,
+	events: Vec<Event>,
 	storage: HashMap<[u8; 32], [u8; 32]>,
+	force_storage_error: bool,
 }
 
 thread_local! {
 	static STATE: RefCell<State> = RefCell::new(State {
 		caller_addr: [0xAA; 20],
 		self_addr: [0xBB; 20],
-		event_count: 0,
+		events: Vec::new(),
 		storage: HashMap::new(),
+		force_storage_error: false,
 	});
 }
 
@@ -61,8 +68,10 @@ impl MockApi {
 		panic!("contract reverted");
 	}
 
-	pub fn deposit_event(_topics: &[[u8; 32]], _data: &[u8]) {
-		with_state(|s| s.event_count += 1);
+	pub fn deposit_event(topics: &[[u8; 32]], data: &[u8]) {
+		with_state(|s| {
+			s.events.push(Event { topics: topics.to_vec(), data: data.to_vec() });
+		});
 	}
 
 	pub fn get_storage(
@@ -71,6 +80,9 @@ impl MockApi {
 		output: &mut &mut [u8],
 	) -> Result<(), ReturnErrorCode> {
 		with_state(|s| {
+			if s.force_storage_error {
+				return Err(ReturnErrorCode::TransferFailed);
+			}
 			if let Some(val) = s.storage.get(key) {
 				let len = output.len().min(32);
 				output[..len].copy_from_slice(&val[..len]);
@@ -102,11 +114,28 @@ pub fn reset() {
 	with_state(|s| {
 		s.caller_addr = [0xAA; 20];
 		s.self_addr = [0xBB; 20];
-		s.event_count = 0;
+		s.events.clear();
 		s.storage.clear();
+		s.force_storage_error = false;
 	});
 }
 
+pub fn set_storage_error(enabled: bool) {
+	with_state(|s| s.force_storage_error = enabled);
+}
+
 pub fn event_count() -> u32 {
-	with_state(|s| s.event_count)
+	with_state(|s| s.events.len() as u32)
+}
+
+/// Returns the topics of the Nth event (0-indexed).
+pub fn event_topics(index: usize) -> Vec<[u8; 32]> {
+	with_state(|s| s.events.get(index).map(|e| e.topics.clone()).unwrap_or_default())
+}
+
+/// Compute keccak256 of input (convenience for tests).
+pub fn keccak256(input: &[u8]) -> [u8; 32] {
+	let mut out = [0u8; 32];
+	MockApi::hash_keccak_256(input, &mut out);
+	out
 }
