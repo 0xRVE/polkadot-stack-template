@@ -39,6 +39,7 @@ mod dex_router {
 	// ── Errors ───────────────────────────────────────────────────────────
 
 	#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+	#[allow(dead_code)] // Variants match Solidity ABI errors; some are reverted via byte literals in do_call
 	pub enum Error {
 		PrecompileCallFailed,
 		TransferFromFailed,

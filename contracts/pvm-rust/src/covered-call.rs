@@ -51,6 +51,7 @@ mod covered_call {
 	const STATUS_LISTED: u8 = 0;
 	const STATUS_ACTIVE: u8 = 1;
 	const STATUS_EXERCISED: u8 = 2;
+	#[allow(dead_code)] // Matches Solidity ABI; expire clears storage rather than setting status
 	const STATUS_EXPIRED: u8 = 3;
 	const STATUS_RESALE: u8 = 4;
 
@@ -60,6 +61,7 @@ mod covered_call {
 	// ── Errors ───────────────────────────────────────────────────────────
 
 	#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+	#[allow(dead_code)] // Variants match Solidity ABI errors; some are reverted via byte literals in do_call
 	pub enum Error {
 		PrecompileCallFailed,
 		TransferFromFailed,
