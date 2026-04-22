@@ -733,6 +733,136 @@ describe("CoveredCall (PVM-Rust)", function () {
 		});
 	});
 
+	describe("Edge cases", function () {
+		it("expires an Active (bought) option and returns collateral to seller", async function () {
+			await waitForNextBlock();
+			const chainNow = await getChainTimestamp();
+			const collateral = 80_000n;
+
+			await sendWithRetry("writeOption (active-expire)", () =>
+				cc.write.writeOption(
+					[ASSETS.testA, ASSETS.testB, collateral, 1n, 0n, chainNow + 30n],
+					{ gas: 5_000_000n },
+				),
+			);
+			const optionId = (await cc.read.nextOptionId()) - 1n;
+
+			// Buy it so status is Active
+			await waitForNextBlock();
+			await sendWithRetry("buyOption (active-expire)", () =>
+				cc.write.buyOption([optionId], { gas: 5_000_000n }),
+			);
+
+			const [, , , , , , , , , , statusAfterBuy] = await cc.read.getOption([optionId]);
+			expect(statusAfterBuy).to.equal(STATUS_ACTIVE);
+
+			// Wait for expiry (~30s from chainNow, ~20s remaining after buy)
+			for (let i = 0; i < 12; i++) {
+				await waitForNextBlock();
+			}
+
+			const aliceTSTAbefore = await getERC20Balance(ERC20_TSTA, deployer.account.address);
+
+			await sendWithRetry("expireOption (active)", () =>
+				deployer.writeContract({
+					address: contractAddress,
+					abi: coveredCallAbi,
+					functionName: "expireOption",
+					args: [optionId],
+					gas: 5_000_000n,
+				}),
+			);
+
+			// Seller gets collateral back even though option was bought
+			const aliceTSTAafter = await getERC20Balance(ERC20_TSTA, deployer.account.address);
+			expect(aliceTSTAafter - aliceTSTAbefore).to.equal(collateral);
+
+			const [seller] = await cc.read.getOption([optionId]);
+			expect(seller.toLowerCase()).to.equal("0x0000000000000000000000000000000000000000");
+		});
+
+		it("allows writing an option with underlying == strikeAsset", async function () {
+			// This is a degenerate option (same asset on both sides) but the contract
+			// does not explicitly reject it. Pin the behavior so changes are intentional.
+			await waitForNextBlock();
+			const chainNow = await getChainTimestamp();
+
+			await sendWithRetry("writeOption (same asset)", () =>
+				cc.write.writeOption(
+					[ASSETS.testA, ASSETS.testA, 10_000n, 1n, 0n, chainNow + 600n],
+					{ gas: 5_000_000n },
+				),
+			);
+
+			const optionId = (await cc.read.nextOptionId()) - 1n;
+			const [seller, underlying, strikeAsset] = await cc.read.getOption([optionId]);
+			expect(seller.toLowerCase()).to.equal(deployer.account.address.toLowerCase());
+			expect(underlying.toLowerCase()).to.equal(strikeAsset.toLowerCase());
+		});
+
+		it("allows a third party to expire someone else's option (permissionless)", async function () {
+			await waitForNextBlock();
+			const chainNow = await getChainTimestamp();
+
+			await sendWithRetry("writeOption (third-party-expire)", () =>
+				cc.write.writeOption(
+					[ASSETS.testA, ASSETS.testB, 10_000n, 1n, 0n, chainNow + 15n],
+					{ gas: 5_000_000n },
+				),
+			);
+			const optionId = (await cc.read.nextOptionId()) - 1n;
+
+			for (let i = 0; i < 8; i++) {
+				await waitForNextBlock();
+			}
+
+			// Bob (not the seller) expires Alice's option
+			const bob = await getWalletClientByIndex(1);
+			await sendWithRetry("expireOption (by Bob)", () =>
+				bob.writeContract({
+					address: contractAddress,
+					abi: coveredCallAbi,
+					functionName: "expireOption",
+					args: [optionId],
+					gas: 5_000_000n,
+				}),
+			);
+
+			const [seller] = await cc.read.getOption([optionId]);
+			expect(seller.toLowerCase()).to.equal("0x0000000000000000000000000000000000000000");
+		});
+
+		it("rejects writeOption when seller has insufficient collateral", async function () {
+			const charlie = await getWalletClientByIndex(2);
+			const chainNow = await getChainTimestamp();
+
+			try {
+				await sendWithRetry("approve[2] for edge case", () =>
+					charlie.writeContract({
+						address: ERC20_TSTA,
+						abi: erc20Abi,
+						functionName: "approve",
+						args: [contractAddress, 999_999_999_999_999_999n],
+						gas: 5_000_000n,
+					}),
+				);
+			} catch {
+				// Already approved
+			}
+
+			await waitForNextBlock();
+			await expectTxReverts(
+				charlie,
+				{
+					address: contractAddress,
+					functionName: "writeOption",
+					args: [ASSETS.testA, ASSETS.testB, 999_999_999_999_999_999n, 1n, 0n, chainNow + 600n],
+				},
+				"PrecompileCallFailed",
+			);
+		});
+	});
+
 	describe("Fallback", function () {
 		it("reverts on unknown selector", async function () {
 			await expectRawTxReverts(deployer, {
