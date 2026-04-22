@@ -856,7 +856,14 @@ describe("CoveredCall (PVM-Rust)", function () {
 				{
 					address: contractAddress,
 					functionName: "writeOption",
-					args: [ASSETS.testA, ASSETS.testB, 999_999_999_999_999_999n, 1n, 0n, chainNow + 600n],
+					args: [
+						ASSETS.testA,
+						ASSETS.testB,
+						999_999_999_999_999_999n,
+						1n,
+						0n,
+						chainNow + 600n,
+					],
 				},
 				"PrecompileCallFailed",
 			);
