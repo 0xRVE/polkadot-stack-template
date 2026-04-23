@@ -10,9 +10,6 @@ use ruint::aliases::U256;
 #[path = "covered_call_mock_api.rs"]
 mod mock_api;
 
-// TODO: pack option details into fewer storage slots using encoding, to save costs and allow more
-// fields if needed. TODO: use u128 for amounts and price? Is that bad UX?
-
 /// CoveredCall — covered call options backed by ERC20 collateral.
 /// Uses the asset-conversion precompile for in-the-money price checks.
 #[cfg_attr(
@@ -60,6 +57,7 @@ mod covered_call {
 
 	/// Global slot for next option ID counter.
 	const SLOT_NEXT_ID: [u8; 32] = [0u8; 32];
+
 
 	// ── Errors ───────────────────────────────────────────────────────────
 
@@ -140,6 +138,9 @@ mod covered_call {
 		if underlying.0 == strike_asset.0 {
 			return Err(Error::InvalidAsset);
 		}
+		let amount = to_u128(amount)?;
+		let strike = to_u128(strike)?;
+		let premium = to_u128(premium)?;
 		let current_time = now();
 		if expiry <= current_time {
 			return Err(Error::InvalidExpiry);
@@ -160,9 +161,9 @@ mod covered_call {
 		storage_set_addr(&option_slot(option_id, TAG_SELLER), &caller);
 		storage_set_bytes(&option_slot(option_id, TAG_UNDERLYING), &underlying.0);
 		storage_set_bytes(&option_slot(option_id, TAG_STRIKE_ASSET), &strike_asset.0);
-		storage_set_u256(&option_slot(option_id, TAG_AMOUNT), amount);
-		storage_set_u256(&option_slot(option_id, TAG_STRIKE), strike);
-		storage_set_u256(&option_slot(option_id, TAG_PREMIUM), premium);
+		storage_set_u128(&option_slot(option_id, TAG_AMOUNT), amount);
+		storage_set_u128(&option_slot(option_id, TAG_STRIKE), strike);
+		storage_set_u128(&option_slot(option_id, TAG_PREMIUM), premium);
 		storage_set_u256(&option_slot(option_id, TAG_EXPIRY), expiry);
 		storage_set_u256(&option_slot(option_id, TAG_CREATED), current_time);
 		storage_set_u256(&option_slot(option_id, TAG_STATUS), U256::from(STATUS_LISTED));
@@ -194,8 +195,8 @@ mod covered_call {
 
 		if status == U256::from(STATUS_LISTED) {
 			// First sale: pay premium to seller.
-			let premium = storage_get_u256(&option_slot(option_id, TAG_PREMIUM));
-			if premium > U256::ZERO {
+			let premium = storage_get_u128(&option_slot(option_id, TAG_PREMIUM));
+			if premium > 0 {
 				let strike_raw = storage_get_raw(&option_slot(option_id, TAG_STRIKE_ASSET));
 				let s_len = asset_byte_len(&strike_raw);
 				pull_token(&strike_raw[..s_len], &caller, &seller, premium);
@@ -203,8 +204,8 @@ mod covered_call {
 		} else {
 			// Resale: pay ask price to current owner.
 			let current_buyer = storage_get_addr(&option_slot(option_id, TAG_BUYER));
-			let ask_price = storage_get_u256(&option_slot(option_id, TAG_ASK_PRICE));
-			if ask_price > U256::ZERO {
+			let ask_price = storage_get_u128(&option_slot(option_id, TAG_ASK_PRICE));
+			if ask_price > 0 {
 				let strike_raw = storage_get_raw(&option_slot(option_id, TAG_STRIKE_ASSET));
 				let s_len = asset_byte_len(&strike_raw);
 				pull_token(&strike_raw[..s_len], &caller, &current_buyer, ask_price);
@@ -239,6 +240,8 @@ mod covered_call {
 			return Err(Error::NotOptionBuyer);
 		}
 
+		let ask_price = to_u128(ask_price)?;
+
 		// Check not expired.
 		let expiry = storage_get_u256(&option_slot(option_id, TAG_EXPIRY));
 		let current_time = now();
@@ -247,7 +250,7 @@ mod covered_call {
 		}
 
 		// List for resale (or update ask price).
-		storage_set_u256(&option_slot(option_id, TAG_ASK_PRICE), ask_price);
+		storage_set_u128(&option_slot(option_id, TAG_ASK_PRICE), ask_price);
 		storage_set_u256(&option_slot(option_id, TAG_STATUS), U256::from(STATUS_RESALE));
 
 		emit_option_resale(option_id, &caller, ask_price);
@@ -300,7 +303,7 @@ mod covered_call {
 		}
 
 		let underlying_raw = storage_get_raw(&option_slot(option_id, TAG_UNDERLYING));
-		let amount = storage_get_u256(&option_slot(option_id, TAG_AMOUNT));
+		let amount = storage_get_u128(&option_slot(option_id, TAG_AMOUNT));
 		let u_len = asset_byte_len(&underlying_raw);
 
 		// Return collateral to seller.
@@ -352,15 +355,15 @@ mod covered_call {
 		// Load option details.
 		let underlying_raw = storage_get_raw(&option_slot(option_id, TAG_UNDERLYING));
 		let strike_raw = storage_get_raw(&option_slot(option_id, TAG_STRIKE_ASSET));
-		let amount = storage_get_u256(&option_slot(option_id, TAG_AMOUNT));
-		let strike = storage_get_u256(&option_slot(option_id, TAG_STRIKE));
+		let amount = storage_get_u128(&option_slot(option_id, TAG_AMOUNT));
+		let strike = storage_get_u128(&option_slot(option_id, TAG_STRIKE));
 
 		let u_len = asset_byte_len(&underlying_raw);
 		let s_len = asset_byte_len(&strike_raw);
 
 		// In-the-money check: market value of underlying > strike.
 		let market_value = get_dex_quote(&underlying_raw[..u_len], &strike_raw[..s_len], amount);
-		if market_value <= strike {
+		if market_value <= U256::from(strike) {
 			return Err(Error::NotInTheMoney);
 		}
 
@@ -399,7 +402,7 @@ mod covered_call {
 		}
 
 		let underlying_raw = storage_get_raw(&option_slot(option_id, TAG_UNDERLYING));
-		let amount = storage_get_u256(&option_slot(option_id, TAG_AMOUNT));
+		let amount = storage_get_u128(&option_slot(option_id, TAG_AMOUNT));
 		let u_len = asset_byte_len(&underlying_raw);
 
 		// Return collateral to seller.
@@ -441,13 +444,13 @@ mod covered_call {
 		let seller = storage_get_addr(&option_slot(option_id, TAG_SELLER));
 		let underlying_raw = storage_get_raw(&option_slot(option_id, TAG_UNDERLYING));
 		let strike_raw = storage_get_raw(&option_slot(option_id, TAG_STRIKE_ASSET));
-		let amount = storage_get_u256(&option_slot(option_id, TAG_AMOUNT));
-		let strike = storage_get_u256(&option_slot(option_id, TAG_STRIKE));
-		let premium = storage_get_u256(&option_slot(option_id, TAG_PREMIUM));
+		let amount = U256::from(storage_get_u128(&option_slot(option_id, TAG_AMOUNT)));
+		let strike = U256::from(storage_get_u128(&option_slot(option_id, TAG_STRIKE)));
+		let premium = U256::from(storage_get_u128(&option_slot(option_id, TAG_PREMIUM)));
 		let expiry = storage_get_u256(&option_slot(option_id, TAG_EXPIRY));
 		let created = storage_get_u256(&option_slot(option_id, TAG_CREATED));
 		let buyer = storage_get_addr(&option_slot(option_id, TAG_BUYER));
-		let ask_price = storage_get_u256(&option_slot(option_id, TAG_ASK_PRICE));
+		let ask_price = U256::from(storage_get_u128(&option_slot(option_id, TAG_ASK_PRICE)));
 		let status = storage_get_u256(&option_slot(option_id, TAG_STATUS));
 
 		let u_len = asset_byte_len(&underlying_raw);
@@ -529,6 +532,24 @@ mod covered_call {
 		api::set_storage(StorageFlags::empty(), key, &buf);
 	}
 
+	/// Checked U256 → u128 cast. AssetHub uses u128 balances.
+	fn to_u128(v: U256) -> Result<u128, Error> {
+		if v > U256::from(u128::MAX) {
+			return Err(Error::Overflow);
+		}
+		Ok(v.as_limbs()[0] as u128 | (v.as_limbs()[1] as u128) << 64)
+	}
+
+	fn storage_get_u128(key: &[u8; 32]) -> u128 {
+		let v = storage_get_u256(key);
+		// Values were validated on write — truncation is safe.
+		v.as_limbs()[0] as u128 | (v.as_limbs()[1] as u128) << 64
+	}
+
+	fn storage_set_u128(key: &[u8; 32], val: u128) {
+		storage_set_u256(key, U256::from(val));
+	}
+
 	fn storage_clear(key: &[u8; 32]) {
 		api::set_storage(StorageFlags::empty(), key, &[]);
 	}
@@ -550,8 +571,8 @@ mod covered_call {
 
 	// ── DEX quote ────────────────────────────────────────────────────────
 
-	fn get_dex_quote(underlying: &[u8], strike_asset: &[u8], amount: U256) -> U256 {
-		let calldata = build_quote_exact_in(underlying, strike_asset, amount, true);
+	fn get_dex_quote(underlying: &[u8], strike_asset: &[u8], amount: u128) -> U256 {
+		let calldata = build_quote_exact_in(underlying, strike_asset, U256::from(amount), true);
 		let out = dex_call(&calldata);
 		dec_u256(&out)
 	}
@@ -563,22 +584,22 @@ mod covered_call {
 
 	// ── Token management ─────────────────────────────────────────────────
 
-	fn pull_token(asset: &[u8], from: &[u8; 20], to: &[u8; 20], amount: U256) {
+	fn pull_token(asset: &[u8], from: &[u8; 20], to: &[u8; 20], amount: u128) {
 		if let Some(erc20) = erc20_of(asset) {
-			erc20_call(&erc20, &build_transfer_from(from, to, amount));
+			erc20_call(&erc20, &build_transfer_from(from, to, U256::from(amount)));
 		}
 	}
 
 	/// Lock collateral for an option. Currently pulls tokens into the contract.
 	/// TODO: replace with a freeze precompile call so tokens stay in the
 	/// writer's account (requires a pallet-assets freeze precompile).
-	fn freeze_token(asset: &[u8], from: &[u8; 20], to: &[u8; 20], amount: U256) {
+	fn freeze_token(asset: &[u8], from: &[u8; 20], to: &[u8; 20], amount: u128) {
 		pull_token(asset, from, to, amount);
 	}
 
-	fn push_token(asset: &[u8], to: &[u8; 20], amount: U256) {
+	fn push_token(asset: &[u8], to: &[u8; 20], amount: u128) {
 		if let Some(erc20) = erc20_of(asset) {
-			erc20_call(&erc20, &build_erc20_transfer(to, amount));
+			erc20_call(&erc20, &build_erc20_transfer(to, U256::from(amount)));
 		}
 	}
 
@@ -747,9 +768,9 @@ mod covered_call {
 	fn emit_option_written(
 		id: U256,
 		seller: &[u8; 20],
-		amount: U256,
-		strike: U256,
-		premium: U256,
+		amount: u128,
+		strike: u128,
+		premium: u128,
 		expiry: U256,
 	) {
 		let mut sig = [0u8; 32];
@@ -761,9 +782,9 @@ mod covered_call {
 		let mut t_seller = [0u8; 32];
 		t_seller[12..32].copy_from_slice(seller);
 		let mut data = [0u8; 128];
-		data[0..32].copy_from_slice(&enc_u256(amount));
-		data[32..64].copy_from_slice(&enc_u256(strike));
-		data[64..96].copy_from_slice(&enc_u256(premium));
+		data[0..32].copy_from_slice(&enc_u256(U256::from(amount)));
+		data[32..64].copy_from_slice(&enc_u256(U256::from(strike)));
+		data[64..96].copy_from_slice(&enc_u256(U256::from(premium)));
 		data[96..128].copy_from_slice(&enc_u256(expiry));
 		api::deposit_event(&[sig, t_id, t_seller], &data);
 	}
@@ -777,13 +798,13 @@ mod covered_call {
 		api::deposit_event(&[sig, t_id, t_buyer], &[]);
 	}
 
-	fn emit_option_resale(id: U256, seller: &[u8; 20], ask_price: U256) {
+	fn emit_option_resale(id: U256, seller: &[u8; 20], ask_price: u128) {
 		let mut sig = [0u8; 32];
 		api::hash_keccak_256(b"OptionResale(uint256,address,uint256)", &mut sig);
 		let t_id = enc_u256(id);
 		let mut t_seller = [0u8; 32];
 		t_seller[12..32].copy_from_slice(seller);
-		let data = enc_u256(ask_price);
+		let data = enc_u256(U256::from(ask_price));
 		api::deposit_event(&[sig, t_id, t_seller], &data);
 	}
 
@@ -1319,6 +1340,51 @@ mod tests {
 			U256::from(100u64),
 			U256::from(500u64),
 			U256::from(20u64),
+			U256::from(50u64),
+		);
+		assert_eq!(result, Err(Error::Overflow));
+	}
+
+	#[test]
+	fn write_option_rejects_amount_exceeding_u128() {
+		setup();
+		let too_big = U256::from(u128::MAX) + U256::from(1);
+		let result = write_option(
+			tsta(),
+			tstb(),
+			too_big,
+			U256::from(500u64),
+			U256::from(20u64),
+			U256::from(50u64),
+		);
+		assert_eq!(result, Err(Error::Overflow));
+	}
+
+	#[test]
+	fn write_option_rejects_strike_exceeding_u128() {
+		setup();
+		let too_big = U256::from(u128::MAX) + U256::from(1);
+		let result = write_option(
+			tsta(),
+			tstb(),
+			U256::from(100u64),
+			too_big,
+			U256::from(20u64),
+			U256::from(50u64),
+		);
+		assert_eq!(result, Err(Error::Overflow));
+	}
+
+	#[test]
+	fn write_option_rejects_premium_exceeding_u128() {
+		setup();
+		let too_big = U256::from(u128::MAX) + U256::from(1);
+		let result = write_option(
+			tsta(),
+			tstb(),
+			U256::from(100u64),
+			U256::from(500u64),
+			too_big,
 			U256::from(50u64),
 		);
 		assert_eq!(result, Err(Error::Overflow));
