@@ -783,23 +783,19 @@ describe("CoveredCall (PVM-Rust)", function () {
 			expect(seller.toLowerCase()).to.equal("0x0000000000000000000000000000000000000000");
 		});
 
-		it("allows writing an option with underlying == strikeAsset", async function () {
-			// This is a degenerate option (same asset on both sides) but the contract
-			// does not explicitly reject it. Pin the behavior so changes are intentional.
+		it("rejects writing an option with underlying == strikeAsset", async function () {
 			await waitForNextBlock();
 			const chainNow = await getChainTimestamp();
 
-			await sendWithRetry("writeOption (same asset)", () =>
-				cc.write.writeOption(
-					[ASSETS.testA, ASSETS.testA, 10_000n, 1n, 0n, chainNow + 600n],
-					{ gas: 5_000_000n },
-				),
+			await expectTxReverts(
+				deployer,
+				{
+					address: cc.address,
+					functionName: "writeOption",
+					args: [ASSETS.testA, ASSETS.testA, 10_000n, 1n, 0n, chainNow + 600n],
+				},
+				"InvalidAsset",
 			);
-
-			const optionId = (await cc.read.nextOptionId()) - 1n;
-			const [seller, underlying, strikeAsset] = await cc.read.getOption([optionId]);
-			expect(seller.toLowerCase()).to.equal(deployer.account.address.toLowerCase());
-			expect(underlying.toLowerCase()).to.equal(strikeAsset.toLowerCase());
 		});
 
 		it("allows a third party to expire someone else's option (permissionless)", async function () {

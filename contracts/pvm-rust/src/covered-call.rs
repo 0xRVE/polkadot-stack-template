@@ -136,6 +136,9 @@ mod covered_call {
 		if erc20_of(&strike_asset.0).is_none() {
 			return Err(Error::InvalidAsset);
 		}
+		if underlying.0 == strike_asset.0 {
+			return Err(Error::InvalidAsset);
+		}
 		let current_time = now();
 		if expiry <= current_time {
 			return Err(Error::InvalidExpiry);
@@ -938,6 +941,20 @@ mod tests {
 		let result = write_option(
 			native,
 			tstb(),
+			U256::from(100u64),
+			U256::from(500u64),
+			U256::from(20u64),
+			U256::from(50u64),
+		);
+		assert_eq!(result, Err(Error::InvalidAsset));
+	}
+
+	#[test]
+	fn write_option_rejects_same_asset() {
+		setup();
+		let result = write_option(
+			tsta(),
+			tsta(),
 			U256::from(100u64),
 			U256::from(500u64),
 			U256::from(20u64),
