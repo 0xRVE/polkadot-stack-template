@@ -21,6 +21,9 @@ mod mock_api;
 ///   found" from unexpected storage errors (as done in VersionRegistry)
 /// - [ ] DEX quote manipulation — spot price can be skewed by large swaps before exercise and
 ///   reversed after. Consider TWAP oracle or minimum hold period
+/// - [ ] pvm_contract_macros is new and unaudited — compiler bugs could silently generate wrong ABI
+///   encoding, storage layout, or control flow. Audit should verify the compiled PVM binary matches
+///   expected behavior, not just the source logic
 ///
 /// Features:
 /// - [ ] freeze_token — currently pulls tokens into the contract; replace with pallet-assets freeze
