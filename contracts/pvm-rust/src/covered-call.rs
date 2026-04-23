@@ -38,8 +38,8 @@ mod mock_api;
 /// - [ ] Upgrade/migration strategy — contract is immutable once deployed
 ///
 /// Edge cases:
-/// - [ ] Block timestamp manipulation — producers can skew within ~6s bounds; risky for very
-///   short-lived options
+/// - [ ] Block timestamp manipulation — producers can skew within ~6s bounds (MEV). Marginal
+///   impact: only matters for very short-lived options near the strike boundary
 /// - [ ] Writer can drain DEX pool to force OTM, let option expire, then reverse. Only profitable
 ///   with low pool liquidity + high option notional + near-the-money strike. Round-trip slippage
 ///   cost scales with pool depth, so deep pools make this prohibitively expensive. Same risk as any
