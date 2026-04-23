@@ -262,6 +262,7 @@ dependencies = [
  "pvm-contract-macros",
  "pvm-contract-types",
  "ruint",
+ "sha3",
 ]
 
 [[package]]

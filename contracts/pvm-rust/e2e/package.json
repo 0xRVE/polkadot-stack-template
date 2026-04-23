@@ -11,6 +11,7 @@
     "test": "npx hardhat test --network local",
     "test:dex": "npx hardhat test test/DexRouter.test.ts --network local",
     "test:covered-call": "npx hardhat test test/CoveredCall.test.ts --network local",
+    "test:registry": "npx hardhat test test/VersionRegistry.test.ts --network local",
     "deploy:covered-call": "npx hardhat run scripts/deploy-covered-call.ts --network local",
     "fmt": "prettier --write 'test/**/*.ts' hardhat.config.ts",
     "fmt:check": "prettier --check 'test/**/*.ts' hardhat.config.ts"
