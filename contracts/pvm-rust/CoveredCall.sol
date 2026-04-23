@@ -44,6 +44,11 @@ interface ICoveredCall {
         address indexed seller
     );
 
+    event OptionDelisted(
+        uint256 indexed optionId,
+        address indexed owner
+    );
+
     // --- Errors ---
 
     error PrecompileCallFailed();
@@ -54,6 +59,7 @@ interface ICoveredCall {
     error OptionAlreadyExpired();
     error NotOptionBuyer();
     error UnauthorizedCancel();
+    error OptionNotResale();
     error NotInTheMoney();
     error InvalidAsset();
     error InvalidAmount();
@@ -85,9 +91,15 @@ interface ICoveredCall {
     function buyOption(uint256 optionId) external;
 
     /// @notice List a bought option for resale on the secondary market.
+    ///         Can also be called on an already-listed option to update the ask price.
     /// @param optionId The option to resell
     /// @param askPrice Price in strike asset that the next buyer must pay
     function resellOption(uint256 optionId, uint256 askPrice) external;
+
+    /// @notice Remove a resale listing, returning the option to Active status.
+    ///         Only the current owner can delist.
+    /// @param optionId The option to delist
+    function delistOption(uint256 optionId) external;
 
     /// @notice Cancel a listed option that hasn't been bought yet.
     ///         Only the seller can cancel. Returns collateral to seller.

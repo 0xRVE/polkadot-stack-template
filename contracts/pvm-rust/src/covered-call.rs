@@ -71,6 +71,7 @@ mod covered_call {
 		OptionAlreadyExpired,
 		NotOptionBuyer,
 		UnauthorizedCancel,
+		OptionNotResale,
 		NotInTheMoney,
 		InvalidAsset,
 		InvalidAmount,
@@ -90,6 +91,7 @@ mod covered_call {
 				Error::OptionAlreadyExpired => b"OptionAlreadyExpired",
 				Error::NotOptionBuyer => b"NotOptionBuyer",
 				Error::UnauthorizedCancel => b"UnauthorizedCancel",
+				Error::OptionNotResale => b"OptionNotResale",
 				Error::NotInTheMoney => b"NotInTheMoney",
 				Error::InvalidAsset => b"InvalidAsset",
 				Error::InvalidAmount => b"InvalidAmount",
@@ -209,17 +211,20 @@ mod covered_call {
 
 	#[pvm_contract_macros::method]
 	pub fn resell_option(option_id: U256, ask_price: U256) -> Result<(), Error> {
-		// Check option is active (bought).
+		// Check option is active or already listed for resale (to update ask price).
 		let seller = storage_get_addr(&option_slot(option_id, TAG_SELLER));
 		if seller == [0u8; 20] {
 			return Err(Error::OptionNotActive);
 		}
 		let status = storage_get_u256(&option_slot(option_id, TAG_STATUS));
-		if status != U256::from(STATUS_ACTIVE) {
+		if status != U256::from(STATUS_ACTIVE)  {
 			return Err(Error::OptionNotActive);
 		}
+		if && status != U256::from(STATUS_RESALE) {
+			return Err(Error::OptionNotResale);
+		}
 
-		// Only the current buyer can resell.
+		// Only the current buyer (option owner) can resell.
 		let buyer = storage_get_addr(&option_slot(option_id, TAG_BUYER));
 		let caller = caller_addr();
 		if caller != buyer {
@@ -233,11 +238,38 @@ mod covered_call {
 			return Err(Error::OptionAlreadyExpired);
 		}
 
-		// List for resale.
+		// List for resale (or update ask price).
 		storage_set_u256(&option_slot(option_id, TAG_ASK_PRICE), ask_price);
 		storage_set_u256(&option_slot(option_id, TAG_STATUS), U256::from(STATUS_RESALE));
 
 		emit_option_resale(option_id, &caller, ask_price);
+		Ok(())
+	}
+
+	#[pvm_contract_macros::method]
+	pub fn delist_option(option_id: U256) -> Result<(), Error> {
+		// Check option is listed for resale.
+		let seller = storage_get_addr(&option_slot(option_id, TAG_SELLER));
+		if seller == [0u8; 20] {
+			return Err(Error::OptionNotActive);
+		}
+		let status = storage_get_u256(&option_slot(option_id, TAG_STATUS));
+		if status != U256::from(STATUS_RESALE) {
+			return Err(Error::OptionNotResale);
+		}
+
+		// Only the current owner can delist.
+		let buyer = storage_get_addr(&option_slot(option_id, TAG_BUYER));
+		let caller = caller_addr();
+		if caller != buyer {
+			return Err(Error::NotOptionBuyer);
+		}
+
+		// Return to active, clear ask price.
+		storage_clear(&option_slot(option_id, TAG_ASK_PRICE));
+		storage_set_u256(&option_slot(option_id, TAG_STATUS), U256::from(STATUS_ACTIVE));
+
+		emit_option_delisted(option_id, &caller);
 		Ok(())
 	}
 
@@ -774,6 +806,15 @@ mod covered_call {
 		t_seller[12..32].copy_from_slice(seller);
 		api::deposit_event(&[sig, t_id, t_seller], &[]);
 	}
+
+	fn emit_option_delisted(id: U256, owner: &[u8; 20]) {
+		let mut sig = [0u8; 32];
+		api::hash_keccak_256(b"OptionDelisted(uint256,address)", &mut sig);
+		let t_id = enc_u256(id);
+		let mut t_owner = [0u8; 32];
+		t_owner[12..32].copy_from_slice(owner);
+		api::deposit_event(&[sig, t_id, t_owner], &[]);
+	}
 }
 
 // ── Unit tests ───────────────────────────────────────────────────────────
@@ -1197,6 +1238,50 @@ mod tests {
 		let result = expire_option(id);
 		assert_eq!(result, Ok(()));
 		assert_eq!(mock_api::call_count(), 1);
+	}
+
+	#[test]
+	fn resell_option_updates_ask_price() {
+		setup();
+		let id = write_std();
+		let _ = buy_option(id);
+		let _ = resell_option(id, U256::from(50u64));
+
+		// Update ask price while already in Resale status.
+		let result = resell_option(id, U256::from(30u64));
+		assert_eq!(result, Ok(()));
+
+		let (_, _, _, _, _, _, _, _, _, ask_price, status) = get_option(id);
+		assert_eq!(ask_price, U256::from(30u64));
+		assert_eq!(status, U256::from(4u64)); // Still Resale.
+	}
+
+	#[test]
+	fn delist_option_returns_to_active() {
+		setup();
+		let id = write_std();
+		let _ = buy_option(id);
+		let _ = resell_option(id, U256::from(50u64));
+		mock_api::reset_counts();
+
+		let result = delist_option(id);
+		assert_eq!(result, Ok(()));
+		assert_eq!(mock_api::event_count(), 1);
+
+		let (_, _, _, _, _, _, _, _, _, ask_price, status) = get_option(id);
+		assert_eq!(status, U256::from(1u64)); // Active.
+		assert_eq!(ask_price, U256::ZERO);    // Cleared.
+	}
+
+	#[test]
+	fn delist_option_rejects_if_not_resale() {
+		setup();
+		let id = write_std();
+		let _ = buy_option(id);
+
+		// Option is Active, not Resale — delist should fail.
+		let result = delist_option(id);
+		assert_eq!(result, Err(Error::OptionNotResale));
 	}
 
 	#[test]
