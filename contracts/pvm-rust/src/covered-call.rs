@@ -40,10 +40,10 @@ mod mock_api;
 /// Edge cases:
 /// - [ ] Block timestamp manipulation — producers can skew within ~6s bounds; risky for very
 ///   short-lived options
-/// - [ ] Writer can drain DEX pool to force OTM, let option expire, then reverse.
-///       Only profitable with low pool liquidity + high option notional + near-the-money
-///       strike. Round-trip slippage cost scales with pool depth, so deep pools make this
-///       prohibitively expensive. Same risk as any protocol using spot AMM quotes for pricing.
+/// - [ ] Writer can drain DEX pool to force OTM, let option expire, then reverse. Only profitable
+///   with low pool liquidity + high option notional + near-the-money strike. Round-trip slippage
+///   cost scales with pool depth, so deep pools make this prohibitively expensive. Same risk as any
+///   protocol using spot AMM quotes for pricing.
 #[cfg_attr(
 	not(test),
 	pvm_contract_macros::contract("CoveredCall.sol", allocator = "bump", allocator_size = 8192)
