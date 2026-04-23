@@ -12,6 +12,37 @@ mod mock_api;
 
 /// CoveredCall — covered call options backed by ERC20 collateral.
 /// Uses the asset-conversion precompile for in-the-money price checks.
+///
+/// # Production TODOs
+///
+/// Security:
+/// - [ ] Formal audit
+/// - [ ] Storage error handling — reads silently return defaults; should distinguish "key not
+///   found" from unexpected storage errors (as done in VersionRegistry)
+/// - [ ] DEX quote manipulation — spot price can be skewed by large swaps before exercise and
+///   reversed after. Consider TWAP oracle or minimum hold period
+///
+/// Features:
+/// - [ ] freeze_token — currently pulls tokens into the contract; replace with pallet-assets freeze
+///   precompile once available so collateral stays in writer's account
+/// - [ ] Option enumeration — no way to list options by writer, owner, asset pair, or status.
+///   Frontends need an off-chain indexer or on-chain linked lists
+/// - [ ] Protocol fee mechanism
+/// - [ ] Partial exercise support
+/// - [ ] delistOption e2e test coverage
+///
+/// Efficiency:
+/// - [ ] Pack option data into fewer storage slots (currently 11 per option)
+///
+/// Operational:
+/// - [ ] Event indexer for building the orderbook off-chain
+/// - [ ] VersionRegistry integration on the frontend for contract address discovery
+/// - [ ] Upgrade/migration strategy — contract is immutable once deployed
+///
+/// Edge cases:
+/// - [ ] Block timestamp manipulation — producers can skew within ~6s bounds; risky for very
+///   short-lived options
+/// - [ ] Writer can drain DEX pool to force OTM, let option expire, then reverse
 #[cfg_attr(
 	not(test),
 	pvm_contract_macros::contract("CoveredCall.sol", allocator = "bump", allocator_size = 8192)
