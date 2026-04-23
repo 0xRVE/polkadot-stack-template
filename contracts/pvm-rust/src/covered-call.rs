@@ -25,8 +25,6 @@ mod mock_api;
 /// Features:
 /// - [ ] freeze_token — currently pulls tokens into the contract; replace with pallet-assets freeze
 ///   precompile once available so collateral stays in writer's account
-/// - [ ] Option enumeration — no way to list options by writer, owner, asset pair, or status.
-///   Frontends need an off-chain indexer or on-chain linked lists
 /// - [ ] Protocol fee mechanism
 /// - [ ] Partial exercise support
 /// - [ ] delistOption e2e test coverage
