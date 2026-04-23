@@ -12,6 +12,41 @@ mod mock_api;
 
 /// CoveredCall — covered call options backed by ERC20 collateral.
 /// Uses the asset-conversion precompile for in-the-money price checks.
+///
+/// # Production TODOs
+///
+/// Security:
+/// - [ ] Formal audit
+/// - [ ] Storage error handling — reads silently return defaults; should distinguish "key not
+///   found" from unexpected storage errors (as done in VersionRegistry)
+/// - [ ] DEX quote manipulation — spot price can be skewed by large swaps before exercise and
+///   reversed after. Consider TWAP oracle or minimum hold period
+/// - [ ] pvm_contract_macros is new and unaudited — compiler bugs could silently generate wrong ABI
+///   encoding, storage layout, or control flow. Audit should verify the compiled PVM binary matches
+///   expected behavior, not just the source logic
+///
+/// Features:
+/// - [ ] freeze_token — currently pulls tokens into the contract; replace with pallet-assets freeze
+///   precompile once available so collateral stays in writer's account
+/// - [ ] Protocol fee mechanism
+/// - [ ] Partial exercise support
+/// - [ ] delistOption e2e test coverage
+///
+/// Efficiency:
+/// - [ ] Pack option data into fewer storage slots (currently 11 per option)
+///
+/// Operational:
+/// - [ ] Event indexer for building the orderbook off-chain
+/// - [ ] VersionRegistry integration on the frontend for contract address discovery
+/// - [ ] Upgrade/migration strategy — contract is immutable once deployed
+///
+/// Edge cases:
+/// - [ ] Block timestamp manipulation — producers can skew within ~6s bounds (MEV). Marginal
+///   impact: only matters for very short-lived options near the strike boundary
+/// - [ ] Writer can drain DEX pool to force OTM, let option expire, then reverse. Only profitable
+///   with low pool liquidity + high option notional + near-the-money strike. Round-trip slippage
+///   cost scales with pool depth, so deep pools make this prohibitively expensive. Same risk as any
+///   protocol using spot AMM quotes for pricing.
 #[cfg_attr(
 	not(test),
 	pvm_contract_macros::contract("CoveredCall.sol", allocator = "bump", allocator_size = 8192)
@@ -36,7 +71,7 @@ mod covered_call {
 	const ERC20_BYTE17: u8 = 0x20;
 
 	// Storage tags for per-option slots.
-	const TAG_SELLER: u8 = 0x00;
+	const TAG_WRITER: u8 = 0x00;
 	const TAG_UNDERLYING: u8 = 0x01;
 	const TAG_STRIKE_ASSET: u8 = 0x02;
 	const TAG_AMOUNT: u8 = 0x03;
@@ -45,7 +80,7 @@ mod covered_call {
 	const TAG_STATUS: u8 = 0x06;
 	const TAG_CREATED: u8 = 0x07;
 	const TAG_PREMIUM: u8 = 0x08;
-	const TAG_BUYER: u8 = 0x09;
+	const TAG_OWNER: u8 = 0x09;
 	const TAG_ASK_PRICE: u8 = 0x0A;
 
 	const STATUS_LISTED: u8 = 0;
@@ -69,7 +104,7 @@ mod covered_call {
 		OptionNotListed,
 		OptionNotExpired,
 		OptionAlreadyExpired,
-		NotOptionBuyer,
+		NotOptionOwner,
 		UnauthorizedCancel,
 		OptionNotResale,
 		NotInTheMoney,
@@ -90,7 +125,7 @@ mod covered_call {
 				Error::OptionNotListed => b"OptionNotListed",
 				Error::OptionNotExpired => b"OptionNotExpired",
 				Error::OptionAlreadyExpired => b"OptionAlreadyExpired",
-				Error::NotOptionBuyer => b"NotOptionBuyer",
+				Error::NotOptionOwner => b"NotOptionOwner",
 				Error::UnauthorizedCancel => b"UnauthorizedCancel",
 				Error::OptionNotResale => b"OptionNotResale",
 				Error::NotInTheMoney => b"NotInTheMoney",
@@ -157,7 +192,7 @@ mod covered_call {
 		freeze_token(&underlying.0, &caller, &me, amount);
 
 		// Store option fields.
-		storage_set_addr(&option_slot(option_id, TAG_SELLER), &caller);
+		storage_set_addr(&option_slot(option_id, TAG_WRITER), &caller);
 		storage_set_bytes(&option_slot(option_id, TAG_UNDERLYING), &underlying.0);
 		storage_set_bytes(&option_slot(option_id, TAG_STRIKE_ASSET), &strike_asset.0);
 		storage_set_u128(&option_slot(option_id, TAG_AMOUNT), amount);
@@ -174,12 +209,12 @@ mod covered_call {
 	#[pvm_contract_macros::method]
 	pub fn buy_option(option_id: U256) -> Result<(), Error> {
 		// Check option exists and is available (listed or resale).
-		let seller = storage_get_addr(&option_slot(option_id, TAG_SELLER));
-		if seller == [0u8; 20] {
-			return Err(Error::OptionNotListed);
-		}
 		let status = storage_get_u256(&option_slot(option_id, TAG_STATUS));
 		if status != U256::from(STATUS_LISTED) && status != U256::from(STATUS_RESALE) {
+			return Err(Error::OptionNotListed);
+		}
+		let writer = storage_get_addr(&option_slot(option_id, TAG_WRITER));
+		if writer == [0u8; 20] {
 			return Err(Error::OptionNotListed);
 		}
 
@@ -193,27 +228,27 @@ mod covered_call {
 		let caller = caller_addr();
 
 		if status == U256::from(STATUS_LISTED) {
-			// First sale: pay premium to seller.
+			// First sale: pay premium to writer.
 			let premium = storage_get_u128(&option_slot(option_id, TAG_PREMIUM));
 			if premium > 0 {
 				let strike_raw = storage_get_raw(&option_slot(option_id, TAG_STRIKE_ASSET));
 				let s_len = asset_byte_len(&strike_raw);
-				pull_token(&strike_raw[..s_len], &caller, &seller, premium);
+				pull_token(&strike_raw[..s_len], &caller, &writer, premium);
 			}
 		} else {
 			// Resale: pay ask price to current owner.
-			let current_buyer = storage_get_addr(&option_slot(option_id, TAG_BUYER));
+			let current_owner = storage_get_addr(&option_slot(option_id, TAG_OWNER));
 			let ask_price = storage_get_u128(&option_slot(option_id, TAG_ASK_PRICE));
 			if ask_price > 0 {
 				let strike_raw = storage_get_raw(&option_slot(option_id, TAG_STRIKE_ASSET));
 				let s_len = asset_byte_len(&strike_raw);
-				pull_token(&strike_raw[..s_len], &caller, &current_buyer, ask_price);
+				pull_token(&strike_raw[..s_len], &caller, &current_owner, ask_price);
 			}
 			storage_clear(&option_slot(option_id, TAG_ASK_PRICE));
 		}
 
-		// Record buyer and activate.
-		storage_set_addr(&option_slot(option_id, TAG_BUYER), &caller);
+		// Record owner and activate.
+		storage_set_addr(&option_slot(option_id, TAG_OWNER), &caller);
 		storage_set_u256(&option_slot(option_id, TAG_STATUS), U256::from(STATUS_ACTIVE));
 
 		emit_option_bought(option_id, &caller);
@@ -223,8 +258,8 @@ mod covered_call {
 	#[pvm_contract_macros::method]
 	pub fn resell_option(option_id: U256, ask_price: U256) -> Result<(), Error> {
 		// Check option is active or already listed for resale (to update ask price).
-		let seller = storage_get_addr(&option_slot(option_id, TAG_SELLER));
-		if seller == [0u8; 20] {
+		let writer = storage_get_addr(&option_slot(option_id, TAG_WRITER));
+		if writer == [0u8; 20] {
 			return Err(Error::OptionNotActive);
 		}
 		let status = storage_get_u256(&option_slot(option_id, TAG_STATUS));
@@ -232,11 +267,11 @@ mod covered_call {
 			return Err(Error::OptionNotActive);
 		}
 
-		// Only the current buyer (option owner) can resell.
-		let buyer = storage_get_addr(&option_slot(option_id, TAG_BUYER));
+		// Only the current owner can resell.
+		let owner = storage_get_addr(&option_slot(option_id, TAG_OWNER));
 		let caller = caller_addr();
-		if caller != buyer {
-			return Err(Error::NotOptionBuyer);
+		if caller != owner {
+			return Err(Error::NotOptionOwner);
 		}
 
 		let ask_price = to_u128(ask_price)?;
@@ -259,8 +294,8 @@ mod covered_call {
 	#[pvm_contract_macros::method]
 	pub fn delist_option(option_id: U256) -> Result<(), Error> {
 		// Check option is listed for resale.
-		let seller = storage_get_addr(&option_slot(option_id, TAG_SELLER));
-		if seller == [0u8; 20] {
+		let writer = storage_get_addr(&option_slot(option_id, TAG_WRITER));
+		if writer == [0u8; 20] {
 			return Err(Error::OptionNotActive);
 		}
 		let status = storage_get_u256(&option_slot(option_id, TAG_STATUS));
@@ -269,10 +304,10 @@ mod covered_call {
 		}
 
 		// Only the current owner can delist.
-		let buyer = storage_get_addr(&option_slot(option_id, TAG_BUYER));
+		let owner = storage_get_addr(&option_slot(option_id, TAG_OWNER));
 		let caller = caller_addr();
-		if caller != buyer {
-			return Err(Error::NotOptionBuyer);
+		if caller != owner {
+			return Err(Error::NotOptionOwner);
 		}
 
 		// Return to active, clear ask price.
@@ -286,18 +321,18 @@ mod covered_call {
 	#[pvm_contract_macros::method]
 	pub fn cancel_option(option_id: U256) -> Result<(), Error> {
 		// Check option exists.
-		let seller = storage_get_addr(&option_slot(option_id, TAG_SELLER));
-		if seller == [0u8; 20] {
+		let writer = storage_get_addr(&option_slot(option_id, TAG_WRITER));
+		if writer == [0u8; 20] {
 			return Err(Error::OptionNotActive);
 		}
-		// Only listed options can be cancelled — once bought, the seller is committed.
+		// Only listed options can be cancelled — once bought, the writer is committed.
 		let status = storage_get_u256(&option_slot(option_id, TAG_STATUS));
 		if status != U256::from(STATUS_LISTED) {
 			return Err(Error::OptionNotListed);
 		}
-		// Only the seller can cancel.
+		// Only the writer can cancel.
 		let caller = caller_addr();
-		if caller != seller {
+		if caller != writer {
 			return Err(Error::UnauthorizedCancel);
 		}
 
@@ -305,11 +340,11 @@ mod covered_call {
 		let amount = storage_get_u128(&option_slot(option_id, TAG_AMOUNT));
 		let u_len = asset_byte_len(&underlying_raw);
 
-		// Return collateral to seller.
-		push_token(&underlying_raw[..u_len], &seller, amount);
+		// Return collateral to writer.
+		push_token(&underlying_raw[..u_len], &writer, amount);
 
 		// Clear storage.
-		storage_clear(&option_slot(option_id, TAG_SELLER));
+		storage_clear(&option_slot(option_id, TAG_WRITER));
 		storage_clear(&option_slot(option_id, TAG_UNDERLYING));
 		storage_clear(&option_slot(option_id, TAG_STRIKE_ASSET));
 		storage_clear(&option_slot(option_id, TAG_AMOUNT));
@@ -317,7 +352,7 @@ mod covered_call {
 		storage_clear(&option_slot(option_id, TAG_PREMIUM));
 		storage_clear(&option_slot(option_id, TAG_EXPIRY));
 		storage_clear(&option_slot(option_id, TAG_CREATED));
-		storage_clear(&option_slot(option_id, TAG_BUYER));
+		storage_clear(&option_slot(option_id, TAG_OWNER));
 		storage_clear(&option_slot(option_id, TAG_ASK_PRICE));
 		storage_clear(&option_slot(option_id, TAG_STATUS));
 
@@ -328,8 +363,8 @@ mod covered_call {
 	#[pvm_contract_macros::method]
 	pub fn exercise_option(option_id: U256) -> Result<(), Error> {
 		// Check option exists and is active (bought).
-		let seller = storage_get_addr(&option_slot(option_id, TAG_SELLER));
-		if seller == [0u8; 20] {
+		let writer = storage_get_addr(&option_slot(option_id, TAG_WRITER));
+		if writer == [0u8; 20] {
 			return Err(Error::OptionNotActive);
 		}
 		let status = storage_get_u256(&option_slot(option_id, TAG_STATUS));
@@ -337,11 +372,11 @@ mod covered_call {
 			return Err(Error::OptionNotActive);
 		}
 
-		// Only the buyer can exercise.
-		let buyer = storage_get_addr(&option_slot(option_id, TAG_BUYER));
+		// Only the owner can exercise.
+		let owner = storage_get_addr(&option_slot(option_id, TAG_OWNER));
 		let caller = caller_addr();
-		if caller != buyer {
-			return Err(Error::NotOptionBuyer);
+		if caller != owner {
+			return Err(Error::NotOptionOwner);
 		}
 
 		// Check not expired.
@@ -366,10 +401,10 @@ mod covered_call {
 			return Err(Error::NotInTheMoney);
 		}
 
-		// Buyer pays strike asset directly to seller.
-		pull_token(&strike_raw[..s_len], &caller, &seller, strike);
+		// Owner pays strike asset directly to writer.
+		pull_token(&strike_raw[..s_len], &caller, &writer, strike);
 
-		// Release collateral to buyer.
+		// Release collateral to owner.
 		push_token(&underlying_raw[..u_len], &caller, amount);
 
 		// Mark exercised.
@@ -382,8 +417,8 @@ mod covered_call {
 	#[pvm_contract_macros::method]
 	pub fn expire_option(option_id: U256) -> Result<(), Error> {
 		// Check option exists and is listed or active.
-		let seller = storage_get_addr(&option_slot(option_id, TAG_SELLER));
-		if seller == [0u8; 20] {
+		let writer = storage_get_addr(&option_slot(option_id, TAG_WRITER));
+		if writer == [0u8; 20] {
 			return Err(Error::OptionNotActive);
 		}
 		let status = storage_get_u256(&option_slot(option_id, TAG_STATUS));
@@ -404,11 +439,11 @@ mod covered_call {
 		let amount = storage_get_u128(&option_slot(option_id, TAG_AMOUNT));
 		let u_len = asset_byte_len(&underlying_raw);
 
-		// Return collateral to seller.
-		push_token(&underlying_raw[..u_len], &seller, amount);
+		// Return collateral to writer.
+		push_token(&underlying_raw[..u_len], &writer, amount);
 
 		// Clear storage — option is fully settled.
-		storage_clear(&option_slot(option_id, TAG_SELLER));
+		storage_clear(&option_slot(option_id, TAG_WRITER));
 		storage_clear(&option_slot(option_id, TAG_UNDERLYING));
 		storage_clear(&option_slot(option_id, TAG_STRIKE_ASSET));
 		storage_clear(&option_slot(option_id, TAG_AMOUNT));
@@ -416,11 +451,11 @@ mod covered_call {
 		storage_clear(&option_slot(option_id, TAG_PREMIUM));
 		storage_clear(&option_slot(option_id, TAG_EXPIRY));
 		storage_clear(&option_slot(option_id, TAG_CREATED));
-		storage_clear(&option_slot(option_id, TAG_BUYER));
+		storage_clear(&option_slot(option_id, TAG_OWNER));
 		storage_clear(&option_slot(option_id, TAG_ASK_PRICE));
 		storage_clear(&option_slot(option_id, TAG_STATUS));
 
-		emit_option_expired(option_id, &seller);
+		emit_option_expired(option_id, &writer);
 		Ok(())
 	}
 
@@ -440,7 +475,7 @@ mod covered_call {
 		U256,
 		U256,
 	) {
-		let seller = storage_get_addr(&option_slot(option_id, TAG_SELLER));
+		let writer = storage_get_addr(&option_slot(option_id, TAG_WRITER));
 		let underlying_raw = storage_get_raw(&option_slot(option_id, TAG_UNDERLYING));
 		let strike_raw = storage_get_raw(&option_slot(option_id, TAG_STRIKE_ASSET));
 		let amount = U256::from(storage_get_u128(&option_slot(option_id, TAG_AMOUNT)));
@@ -448,7 +483,7 @@ mod covered_call {
 		let premium = U256::from(storage_get_u128(&option_slot(option_id, TAG_PREMIUM)));
 		let expiry = storage_get_u256(&option_slot(option_id, TAG_EXPIRY));
 		let created = storage_get_u256(&option_slot(option_id, TAG_CREATED));
-		let buyer = storage_get_addr(&option_slot(option_id, TAG_BUYER));
+		let owner = storage_get_addr(&option_slot(option_id, TAG_OWNER));
 		let ask_price = U256::from(storage_get_u128(&option_slot(option_id, TAG_ASK_PRICE)));
 		let status = storage_get_u256(&option_slot(option_id, TAG_STATUS));
 
@@ -456,7 +491,7 @@ mod covered_call {
 		let s_len = asset_byte_len(&strike_raw);
 
 		(
-			pvm_contract_types::Address(seller),
+			pvm_contract_types::Address(writer),
 			Bytes(underlying_raw[..u_len].to_vec()),
 			Bytes(strike_raw[..s_len].to_vec()),
 			amount,
@@ -464,7 +499,7 @@ mod covered_call {
 			premium,
 			expiry,
 			created,
-			pvm_contract_types::Address(buyer),
+			pvm_contract_types::Address(owner),
 			ask_price,
 			status,
 		)
@@ -766,7 +801,7 @@ mod covered_call {
 
 	fn emit_option_written(
 		id: U256,
-		seller: &[u8; 20],
+		writer: &[u8; 20],
 		amount: u128,
 		strike: u128,
 		premium: u128,
@@ -778,60 +813,60 @@ mod covered_call {
 			&mut sig,
 		);
 		let t_id = enc_u256(id);
-		let mut t_seller = [0u8; 32];
-		t_seller[12..32].copy_from_slice(seller);
+		let mut t_writer = [0u8; 32];
+		t_writer[12..32].copy_from_slice(writer);
 		let mut data = [0u8; 128];
 		data[0..32].copy_from_slice(&enc_u256(U256::from(amount)));
 		data[32..64].copy_from_slice(&enc_u256(U256::from(strike)));
 		data[64..96].copy_from_slice(&enc_u256(U256::from(premium)));
 		data[96..128].copy_from_slice(&enc_u256(expiry));
-		api::deposit_event(&[sig, t_id, t_seller], &data);
+		api::deposit_event(&[sig, t_id, t_writer], &data);
 	}
 
-	fn emit_option_bought(id: U256, buyer: &[u8; 20]) {
+	fn emit_option_bought(id: U256, owner: &[u8; 20]) {
 		let mut sig = [0u8; 32];
 		api::hash_keccak_256(b"OptionBought(uint256,address)", &mut sig);
 		let t_id = enc_u256(id);
-		let mut t_buyer = [0u8; 32];
-		t_buyer[12..32].copy_from_slice(buyer);
-		api::deposit_event(&[sig, t_id, t_buyer], &[]);
+		let mut t_owner = [0u8; 32];
+		t_owner[12..32].copy_from_slice(owner);
+		api::deposit_event(&[sig, t_id, t_owner], &[]);
 	}
 
-	fn emit_option_resale(id: U256, seller: &[u8; 20], ask_price: u128) {
+	fn emit_option_resale(id: U256, owner: &[u8; 20], ask_price: u128) {
 		let mut sig = [0u8; 32];
 		api::hash_keccak_256(b"OptionResale(uint256,address,uint256)", &mut sig);
 		let t_id = enc_u256(id);
-		let mut t_seller = [0u8; 32];
-		t_seller[12..32].copy_from_slice(seller);
+		let mut t_owner = [0u8; 32];
+		t_owner[12..32].copy_from_slice(owner);
 		let data = enc_u256(U256::from(ask_price));
-		api::deposit_event(&[sig, t_id, t_seller], &data);
+		api::deposit_event(&[sig, t_id, t_owner], &data);
 	}
 
-	fn emit_option_exercised(id: U256, buyer: &[u8; 20]) {
+	fn emit_option_exercised(id: U256, owner: &[u8; 20]) {
 		let mut sig = [0u8; 32];
 		api::hash_keccak_256(b"OptionExercised(uint256,address)", &mut sig);
 		let t_id = enc_u256(id);
-		let mut t_buyer = [0u8; 32];
-		t_buyer[12..32].copy_from_slice(buyer);
-		api::deposit_event(&[sig, t_id, t_buyer], &[]);
+		let mut t_owner = [0u8; 32];
+		t_owner[12..32].copy_from_slice(owner);
+		api::deposit_event(&[sig, t_id, t_owner], &[]);
 	}
 
-	fn emit_option_expired(id: U256, seller: &[u8; 20]) {
+	fn emit_option_expired(id: U256, writer: &[u8; 20]) {
 		let mut sig = [0u8; 32];
 		api::hash_keccak_256(b"OptionExpired(uint256,address)", &mut sig);
 		let t_id = enc_u256(id);
-		let mut t_seller = [0u8; 32];
-		t_seller[12..32].copy_from_slice(seller);
-		api::deposit_event(&[sig, t_id, t_seller], &[]);
+		let mut t_writer = [0u8; 32];
+		t_writer[12..32].copy_from_slice(writer);
+		api::deposit_event(&[sig, t_id, t_writer], &[]);
 	}
 
-	fn emit_option_cancelled(id: U256, seller: &[u8; 20]) {
+	fn emit_option_cancelled(id: U256, writer: &[u8; 20]) {
 		let mut sig = [0u8; 32];
 		api::hash_keccak_256(b"OptionCancelled(uint256,address)", &mut sig);
 		let t_id = enc_u256(id);
-		let mut t_seller = [0u8; 32];
-		t_seller[12..32].copy_from_slice(seller);
-		api::deposit_event(&[sig, t_id, t_seller], &[]);
+		let mut t_writer = [0u8; 32];
+		t_writer[12..32].copy_from_slice(writer);
+		api::deposit_event(&[sig, t_id, t_writer], &[]);
 	}
 
 	fn emit_option_delisted(id: U256, owner: &[u8; 20]) {
@@ -985,7 +1020,7 @@ mod tests {
 	}
 
 	#[test]
-	fn buy_option_sets_buyer_and_status() {
+	fn buy_option_sets_owner_and_status() {
 		setup();
 		let id = write_std();
 		mock_api::reset_counts();
@@ -996,8 +1031,8 @@ mod tests {
 		assert_eq!(mock_api::call_count(), 1);
 		assert_eq!(mock_api::event_count(), 1);
 
-		let (_, _, _, _, _, _, _, _, buyer, _, status) = get_option(id);
-		assert_eq!(buyer.0, [0xAA; 20]); // Mock caller.
+		let (_, _, _, _, _, _, _, _, owner, _, status) = get_option(id);
+		assert_eq!(owner.0, [0xAA; 20]); // Mock caller.
 		assert_eq!(status, U256::from(1u64)); // Active.
 	}
 
@@ -1059,7 +1094,7 @@ mod tests {
 
 		let result = exercise_option(id);
 		assert_eq!(result, Ok(()));
-		// 1 DEX quote + 1 transferFrom (buyer pays seller) + 1 transfer (collateral to buyer) = 3.
+		// 1 DEX quote + 1 transferFrom (owner pays writer) + 1 transfer (collateral to owner) = 3.
 		assert_eq!(mock_api::call_count(), 3);
 		assert_eq!(mock_api::event_count(), 1);
 	}
@@ -1190,7 +1225,7 @@ mod tests {
 		let _ = write_std();
 
 		let (
-			seller,
+			writer,
 			underlying,
 			strike_asset,
 			amount,
@@ -1198,11 +1233,11 @@ mod tests {
 			premium,
 			expiry,
 			created,
-			buyer,
+			owner,
 			ask_price,
 			status,
 		) = get_option(U256::ZERO);
-		assert_eq!(seller.0, [0xAA; 20]);
+		assert_eq!(writer.0, [0xAA; 20]);
 		assert_eq!(underlying.0, vec![0x01, 1, 0, 0, 0]);
 		assert_eq!(strike_asset.0, vec![0x01, 2, 0, 0, 0]);
 		assert_eq!(amount, U256::from(100u64));
@@ -1210,7 +1245,7 @@ mod tests {
 		assert_eq!(premium, U256::from(20u64));
 		assert_eq!(expiry, U256::from(50u64));
 		assert_eq!(created, U256::from(10u64));
-		assert_eq!(buyer.0, [0u8; 20]); // No buyer yet.
+		assert_eq!(owner.0, [0u8; 20]); // No owner yet.
 		assert_eq!(ask_price, U256::ZERO);
 		assert_eq!(status, U256::ZERO); // Listed.
 	}
@@ -1232,10 +1267,10 @@ mod tests {
 	}
 
 	#[test]
-	fn resell_option_rejects_if_not_buyer() {
+	fn resell_option_rejects_if_not_owner() {
 		setup();
 		let id = write_std();
-		// Option is listed, not bought — no buyer to resell.
+		// Option is listed, not bought — no owner to resell.
 		let result = resell_option(id, U256::from(50u64));
 		assert_eq!(result, Err(Error::OptionNotActive));
 	}

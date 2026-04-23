@@ -17,7 +17,7 @@ const coveredCallAbi = parseAbi([
 	"function cancelOption(uint256 optionId) external",
 	"function exerciseOption(uint256 optionId) external",
 	"function expireOption(uint256 optionId) external",
-	"function getOption(uint256 optionId) external view returns (address seller, bytes underlying, bytes strikeAsset, uint256 amount, uint256 strike, uint256 premium, uint256 expiry, uint256 created, address buyer, uint256 askPrice, uint256 status)",
+	"function getOption(uint256 optionId) external view returns (address writer, bytes underlying, bytes strikeAsset, uint256 amount, uint256 strike, uint256 premium, uint256 expiry, uint256 created, address owner, uint256 askPrice, uint256 status)",
 	"function nextOptionId() external view returns (uint256)",
 	"error PrecompileCallFailed()",
 	"error TransferFromFailed()",
@@ -25,7 +25,7 @@ const coveredCallAbi = parseAbi([
 	"error OptionNotListed()",
 	"error OptionNotExpired()",
 	"error OptionAlreadyExpired()",
-	"error NotOptionBuyer()",
+	"error NotOptionOwner()",
 	"error UnauthorizedCancel()",
 	"error OptionNotResale()",
 	"error NotInTheMoney()",
@@ -410,14 +410,14 @@ describe("CoveredCall (PVM-Rust)", function () {
 			const idAfter = await cc.read.nextOptionId();
 			expect(idAfter).to.equal(firstOptionId + 1n);
 
-			// Seller's underlying balance decreased by the collateral amount
+			// Writer's underlying balance decreased by the collateral amount
 			const aliceTSTAafter = await getERC20Balance(ERC20_TSTA, deployer.account.address);
 			expect(aliceTSTAbefore - aliceTSTAafter).to.equal(1_000_000_000n);
 		});
 
 		it("stores correct option data with Listed status", async function () {
 			const [
-				seller,
+				writer,
 				underlying,
 				strikeAsset,
 				amount,
@@ -425,12 +425,12 @@ describe("CoveredCall (PVM-Rust)", function () {
 				premium,
 				expiry,
 				created,
-				buyer,
+				owner,
 				askPrice,
 				status,
 			] = await cc.read.getOption([firstOptionId]);
 
-			expect(seller.toLowerCase()).to.equal(deployer.account.address.toLowerCase());
+			expect(writer.toLowerCase()).to.equal(deployer.account.address.toLowerCase());
 			expect(underlying.toLowerCase()).to.equal(ASSETS.testA.toLowerCase());
 			expect(strikeAsset.toLowerCase()).to.equal(ASSETS.testB.toLowerCase());
 			expect(amount).to.equal(1_000_000_000n);
@@ -439,8 +439,8 @@ describe("CoveredCall (PVM-Rust)", function () {
 			expect(expiry).to.equal(firstOptionExpiry);
 			expect(created > 0n).to.equal(true, "created should be > 0");
 			expect(created <= firstOptionExpiry).to.equal(true, "created should be <= expiry");
-			// No buyer yet — zero address
-			expect(buyer.toLowerCase()).to.equal("0x0000000000000000000000000000000000000000");
+			// No owner yet — zero address
+			expect(owner.toLowerCase()).to.equal("0x0000000000000000000000000000000000000000");
 			expect(askPrice).to.equal(0n);
 			expect(status).to.equal(STATUS_LISTED);
 		});
@@ -512,8 +512,8 @@ describe("CoveredCall (PVM-Rust)", function () {
 				cc.write.buyOption([buyableOptionId], { gas: 5_000_000n }),
 			);
 
-			const [, , , , , , , , buyer, , status] = await cc.read.getOption([buyableOptionId]);
-			expect(buyer.toLowerCase()).to.equal(deployer.account.address.toLowerCase());
+			const [, , , , , , , , owner, , status] = await cc.read.getOption([buyableOptionId]);
+			expect(owner.toLowerCase()).to.equal(deployer.account.address.toLowerCase());
 			expect(status).to.equal(STATUS_ACTIVE);
 		});
 
@@ -592,10 +592,10 @@ describe("CoveredCall (PVM-Rust)", function () {
 			);
 
 			// expire_option clears all storage slots, so getOption returns zeros.
-			const [seller] = await cc.read.getOption([shortExpiryOptionId]);
-			expect(seller.toLowerCase()).to.equal("0x0000000000000000000000000000000000000000");
+			const [writer] = await cc.read.getOption([shortExpiryOptionId]);
+			expect(writer.toLowerCase()).to.equal("0x0000000000000000000000000000000000000000");
 
-			// Seller gets collateral back
+			// Writer gets collateral back
 			const aliceTSTAafter = await getERC20Balance(ERC20_TSTA, deployer.account.address);
 			expect(aliceTSTAafter - aliceTSTAbefore).to.equal(collateralAmount);
 		});
@@ -651,12 +651,12 @@ describe("CoveredCall (PVM-Rust)", function () {
 			);
 		});
 
-		it("rejects exercise by non-buyer", async function () {
+		it("rejects exercise by non-owner", async function () {
 			// Write and buy an option as Alice (deployer)
 			await waitForNextBlock();
 			const chainNow = await getChainTimestamp();
 
-			await sendWithRetry("writeOption (for non-buyer test)", () =>
+			await sendWithRetry("writeOption (for non-owner test)", () =>
 				cc.write.writeOption(
 					[ASSETS.testA, ASSETS.testB, 100_000n, 1n, 0n, chainNow + 600n],
 					{ gas: 5_000_000n },
@@ -669,23 +669,23 @@ describe("CoveredCall (PVM-Rust)", function () {
 				cc.write.buyOption([optionId], { gas: 5_000_000n }),
 			);
 
-			// Bob (not the buyer) tries to exercise
+			// Bob (not the owner) tries to exercise
 			const bob = await getWalletClientByIndex(1);
 			await approveERC20As(1, ERC20_TSTB, contractAddress, 100_000_000_000_000n);
 			await waitForNextBlock();
 			await expectTxReverts(
 				bob,
 				{ address: contractAddress, functionName: "exerciseOption", args: [optionId] },
-				"NotOptionBuyer",
+				"NotOptionOwner",
 			);
 		});
 
-		it("rejects resell by non-buyer", async function () {
+		it("rejects resell by non-owner", async function () {
 			// Write and buy an option as Alice (deployer)
 			await waitForNextBlock();
 			const chainNow = await getChainTimestamp();
 
-			await sendWithRetry("writeOption (for non-reseller test)", () =>
+			await sendWithRetry("writeOption (for non-rewriter test)", () =>
 				cc.write.writeOption(
 					[ASSETS.testA, ASSETS.testB, 100_000n, 1n, 0n, chainNow + 600n],
 					{ gas: 5_000_000n },
@@ -698,13 +698,13 @@ describe("CoveredCall (PVM-Rust)", function () {
 				cc.write.buyOption([optionId], { gas: 5_000_000n }),
 			);
 
-			// Bob (not the buyer) tries to resell
+			// Bob (not the owner) tries to resell
 			const bob = await getWalletClientByIndex(1);
 			await waitForNextBlock();
 			await expectTxReverts(
 				bob,
 				{ address: contractAddress, functionName: "resellOption", args: [optionId, 100n] },
-				"NotOptionBuyer",
+				"NotOptionOwner",
 			);
 		});
 
@@ -740,7 +740,7 @@ describe("CoveredCall (PVM-Rust)", function () {
 	});
 
 	describe("Edge cases", function () {
-		it("expires an Active (bought) option and returns collateral to seller", async function () {
+		it("expires an Active (bought) option and returns collateral to writer", async function () {
 			await waitForNextBlock();
 			const chainNow = await getChainTimestamp();
 			const collateral = 80_000n;
@@ -779,12 +779,12 @@ describe("CoveredCall (PVM-Rust)", function () {
 				}),
 			);
 
-			// Seller gets collateral back even though option was bought
+			// Writer gets collateral back even though option was bought
 			const aliceTSTAafter = await getERC20Balance(ERC20_TSTA, deployer.account.address);
 			expect(aliceTSTAafter - aliceTSTAbefore).to.equal(collateral);
 
-			const [seller] = await cc.read.getOption([optionId]);
-			expect(seller.toLowerCase()).to.equal("0x0000000000000000000000000000000000000000");
+			const [writer] = await cc.read.getOption([optionId]);
+			expect(writer.toLowerCase()).to.equal("0x0000000000000000000000000000000000000000");
 		});
 
 		it("rejects writing an option with underlying == strikeAsset", async function () {
@@ -819,7 +819,7 @@ describe("CoveredCall (PVM-Rust)", function () {
 				await waitForNextBlock();
 			}
 
-			// Bob (not the seller) expires Alice's option
+			// Bob (not the writer) expires Alice's option
 			const bob = await getWalletClientByIndex(1);
 			await sendWithRetry("expireOption (by Bob)", () =>
 				bob.writeContract({
@@ -831,8 +831,8 @@ describe("CoveredCall (PVM-Rust)", function () {
 				}),
 			);
 
-			const [seller] = await cc.read.getOption([optionId]);
-			expect(seller.toLowerCase()).to.equal("0x0000000000000000000000000000000000000000");
+			const [writer] = await cc.read.getOption([optionId]);
+			expect(writer.toLowerCase()).to.equal("0x0000000000000000000000000000000000000000");
 		});
 
 		it("writeOption with insufficient collateral does not increase contract holdings", async function () {
@@ -900,7 +900,7 @@ describe("CoveredCall (PVM-Rust)", function () {
 			}
 		});
 
-		it("seller cancels a listed option and gets collateral back", async function () {
+		it("writer cancels a listed option and gets collateral back", async function () {
 			await waitForNextBlock();
 			const chainNow = await getChainTimestamp();
 			const collateral = 50_000n;
@@ -937,8 +937,8 @@ describe("CoveredCall (PVM-Rust)", function () {
 			expect(aliceTSTAafterCancel - aliceTSTAafterWrite).to.equal(collateral);
 
 			// Option is gone
-			const [seller] = await cc.read.getOption([optionId]);
-			expect(seller.toLowerCase()).to.equal("0x0000000000000000000000000000000000000000");
+			const [writer] = await cc.read.getOption([optionId]);
+			expect(writer.toLowerCase()).to.equal("0x0000000000000000000000000000000000000000");
 		});
 
 		it("rejects cancel of a bought (Active) option", async function () {
@@ -966,11 +966,11 @@ describe("CoveredCall (PVM-Rust)", function () {
 			);
 		});
 
-		it("rejects cancel by non-seller", async function () {
+		it("rejects cancel by non-writer", async function () {
 			await waitForNextBlock();
 			const chainNow = await getChainTimestamp();
 
-			await sendWithRetry("writeOption (non-seller cancel)", () =>
+			await sendWithRetry("writeOption (non-writer cancel)", () =>
 				cc.write.writeOption(
 					[ASSETS.testA, ASSETS.testB, 50_000n, 1n, 0n, chainNow + 600n],
 					{ gas: 5_000_000n },
@@ -1038,8 +1038,8 @@ describe("CoveredCall (PVM-Rust)", function () {
 				}),
 			);
 
-			const [, , , , , , , , buyer, , status] = await cc.read.getOption([optionId]);
-			expect(buyer.toLowerCase()).to.equal(deployer.account.address.toLowerCase());
+			const [, , , , , , , , owner, , status] = await cc.read.getOption([optionId]);
+			expect(owner.toLowerCase()).to.equal(deployer.account.address.toLowerCase());
 			expect(status).to.equal(STATUS_ACTIVE);
 
 			// Alice tries to cancel — should fail (option is Active, not Listed)
@@ -1363,10 +1363,10 @@ describe("CoveredCall full lifecycle", function () {
 			);
 			optionId = idBefore;
 
-			const [seller, , , , , , , , , , status] = await sharedContract.read.getOption([
+			const [writer, , , , , , , , , , status] = await sharedContract.read.getOption([
 				optionId,
 			]);
-			expect(seller.toLowerCase()).to.equal(ALICE_ADDR.toLowerCase());
+			expect(writer.toLowerCase()).to.equal(ALICE_ADDR.toLowerCase());
 			expect(status).to.equal(STATUS_LISTED);
 		});
 
@@ -1385,10 +1385,10 @@ describe("CoveredCall full lifecycle", function () {
 			expect(bobTSTBbefore - bobTSTBafter).to.equal(500n);
 			expect(aliceTSTBafter - aliceTSTBbefore).to.equal(500n);
 
-			const [, , , , , , , , buyer, , status] = await sharedContract.read.getOption([
+			const [, , , , , , , , owner, , status] = await sharedContract.read.getOption([
 				optionId,
 			]);
-			expect(buyer.toLowerCase()).to.equal(BOB_ADDR.toLowerCase());
+			expect(owner.toLowerCase()).to.equal(BOB_ADDR.toLowerCase());
 			expect(status).to.equal(STATUS_ACTIVE);
 		});
 
@@ -1420,9 +1420,9 @@ describe("CoveredCall full lifecycle", function () {
 
 			// Bob receives the underlying TSTA
 			expect(bobTSTAafter - bobTSTAbefore).to.equal(OPTION_AMOUNT);
-			// Bob pays strike total of TSTB to seller
+			// Bob pays strike total of TSTB to writer
 			expect(bobTSTBbefore - bobTSTBafter).to.equal(OPTION_AMOUNT);
-			// Alice (seller) receives the strike payment
+			// Alice (writer) receives the strike payment
 			expect(aliceTSTBafter - aliceTSTBbefore).to.equal(OPTION_AMOUNT);
 
 			const [, , , , , , , , , , status] = await sharedContract.read.getOption([optionId]);
@@ -1452,10 +1452,10 @@ describe("CoveredCall full lifecycle", function () {
 
 			const idAfter = await sharedContract.read.nextOptionId();
 			expect(idAfter).to.equal(optionId + 1n);
-			const [seller, , , , , , , , , , status] = await sharedContract.read.getOption([
+			const [writer, , , , , , , , , , status] = await sharedContract.read.getOption([
 				optionId,
 			]);
-			expect(seller.toLowerCase()).to.equal(ALICE_ADDR.toLowerCase());
+			expect(writer.toLowerCase()).to.equal(ALICE_ADDR.toLowerCase());
 			expect(status).to.equal(STATUS_LISTED);
 		});
 
@@ -1473,10 +1473,10 @@ describe("CoveredCall full lifecycle", function () {
 			expect(bobTSTBbefore - bobTSTBafter).to.equal(500n);
 			expect(aliceTSTBafter - aliceTSTBbefore).to.equal(500n);
 
-			const [, , , , , , , , buyer, , status] = await sharedContract.read.getOption([
+			const [, , , , , , , , owner, , status] = await sharedContract.read.getOption([
 				optionId,
 			]);
-			expect(buyer.toLowerCase()).to.equal(BOB_ADDR.toLowerCase());
+			expect(owner.toLowerCase()).to.equal(BOB_ADDR.toLowerCase());
 			expect(status).to.equal(STATUS_ACTIVE);
 		});
 
@@ -1506,10 +1506,10 @@ describe("CoveredCall full lifecycle", function () {
 			expect(charlieTSTBbefore - charlieTSTBafter).to.equal(300n);
 			expect(bobTSTBafter - bobTSTBbefore).to.equal(300n);
 
-			const [, , , , , , , , buyer, askPrice, status] = await sharedContract.read.getOption([
+			const [, , , , , , , , owner, askPrice, status] = await sharedContract.read.getOption([
 				optionId,
 			]);
-			expect(buyer.toLowerCase()).to.equal(CHARLIE_ADDR.toLowerCase());
+			expect(owner.toLowerCase()).to.equal(CHARLIE_ADDR.toLowerCase());
 			expect(status).to.equal(STATUS_ACTIVE);
 			expect(askPrice).to.equal(0n);
 		});
@@ -1582,10 +1582,10 @@ describe("CoveredCall full lifecycle", function () {
 			);
 			optionId = idBefore;
 
-			const [seller, , , , , , , , , , status] = await sharedContract.read.getOption([
+			const [writer, , , , , , , , , , status] = await sharedContract.read.getOption([
 				optionId,
 			]);
-			expect(seller.toLowerCase()).to.equal(ALICE_ADDR.toLowerCase());
+			expect(writer.toLowerCase()).to.equal(ALICE_ADDR.toLowerCase());
 			expect(status).to.equal(STATUS_LISTED);
 		});
 
@@ -1646,10 +1646,10 @@ describe("CoveredCall full lifecycle", function () {
 			);
 			optionId = idBefore;
 
-			const [seller, , , , strike, , , , , , status] = await sharedContract.read.getOption([
+			const [writer, , , , strike, , , , , , status] = await sharedContract.read.getOption([
 				optionId,
 			]);
-			expect(seller.toLowerCase()).to.equal(ALICE_ADDR.toLowerCase());
+			expect(writer.toLowerCase()).to.equal(ALICE_ADDR.toLowerCase());
 			expect(strike).to.equal(OTM_STRIKE);
 			expect(status).to.equal(STATUS_LISTED);
 		});
@@ -1669,10 +1669,10 @@ describe("CoveredCall full lifecycle", function () {
 			expect(bobTSTBbefore - bobTSTBafter).to.equal(100n);
 			expect(aliceTSTBafter - aliceTSTBbefore).to.equal(100n);
 
-			const [, , , , , , , , buyer, , status] = await sharedContract.read.getOption([
+			const [, , , , , , , , owner, , status] = await sharedContract.read.getOption([
 				optionId,
 			]);
-			expect(buyer.toLowerCase()).to.equal(BOB_ADDR.toLowerCase());
+			expect(owner.toLowerCase()).to.equal(BOB_ADDR.toLowerCase());
 			expect(status).to.equal(STATUS_ACTIVE);
 		});
 
