@@ -10,6 +10,8 @@ use ruint::aliases::U256;
 #[path = "covered_call_mock_api.rs"]
 mod mock_api;
 
+// TODO: pack option details into fewer storage slots using encoding, to save costs and allow more fields if needed.
+
 /// CoveredCall — covered call options backed by ERC20 collateral.
 /// Uses the asset-conversion precompile for in-the-money price checks.
 #[cfg_attr(
@@ -40,7 +42,7 @@ mod covered_call {
 	const TAG_UNDERLYING: u8 = 0x01;
 	const TAG_STRIKE_ASSET: u8 = 0x02;
 	const TAG_AMOUNT: u8 = 0x03;
-	const TAG_STRIKE_PRICE: u8 = 0x04;
+	const TAG_STRIKE: u8 = 0x04;
 	const TAG_EXPIRY: u8 = 0x05;
 	const TAG_STATUS: u8 = 0x06;
 	const TAG_CREATED: u8 = 0x07;
@@ -75,6 +77,7 @@ mod covered_call {
 		NotInTheMoney,
 		InvalidAsset,
 		InvalidAmount,
+		InvalidStrike,
 		InvalidExpiry,
 		Overflow,
 		UnknownSelector,
@@ -95,6 +98,7 @@ mod covered_call {
 				Error::NotInTheMoney => b"NotInTheMoney",
 				Error::InvalidAsset => b"InvalidAsset",
 				Error::InvalidAmount => b"InvalidAmount",
+				Error::InvalidStrike => b"InvalidStrike",
 				Error::InvalidExpiry => b"InvalidExpiry",
 				Error::Overflow => b"Overflow",
 				Error::UnknownSelector => b"UnknownSelector",
@@ -116,22 +120,25 @@ mod covered_call {
 		underlying: Bytes,
 		strike_asset: Bytes,
 		amount: U256,
-		strike_price: U256,
+		strike: U256,
 		premium: U256,
 		expiry: U256,
 	) -> Result<U256, Error> {
-		if amount == U256::ZERO || strike_price == U256::ZERO {
+		if amount == U256::ZERO {
 			return Err(Error::InvalidAmount);
 		}
-		let current_time = now();
-		if expiry <= current_time {
-			return Err(Error::InvalidExpiry);
+		if strike == U256::ZERO {
+			return Err(Error::InvalidStrike);
 		}
 		if erc20_of(&underlying.0).is_none() {
 			return Err(Error::InvalidAsset);
 		}
 		if erc20_of(&strike_asset.0).is_none() {
 			return Err(Error::InvalidAsset);
+		}
+		let current_time = now();
+		if expiry <= current_time {
+			return Err(Error::InvalidExpiry);
 		}
 
 		let caller = caller_addr();
@@ -150,13 +157,13 @@ mod covered_call {
 		storage_set_bytes(&option_slot(option_id, TAG_UNDERLYING), &underlying.0);
 		storage_set_bytes(&option_slot(option_id, TAG_STRIKE_ASSET), &strike_asset.0);
 		storage_set_u256(&option_slot(option_id, TAG_AMOUNT), amount);
-		storage_set_u256(&option_slot(option_id, TAG_STRIKE_PRICE), strike_price);
+		storage_set_u256(&option_slot(option_id, TAG_STRIKE), strike);
 		storage_set_u256(&option_slot(option_id, TAG_PREMIUM), premium);
 		storage_set_u256(&option_slot(option_id, TAG_EXPIRY), expiry);
 		storage_set_u256(&option_slot(option_id, TAG_CREATED), current_time);
 		storage_set_u256(&option_slot(option_id, TAG_STATUS), U256::from(STATUS_LISTED));
 
-		emit_option_written(option_id, &caller, amount, strike_price, premium, expiry);
+		emit_option_written(option_id, &caller, amount, strike, premium, expiry);
 		Ok(option_id)
 	}
 
@@ -217,11 +224,8 @@ mod covered_call {
 			return Err(Error::OptionNotActive);
 		}
 		let status = storage_get_u256(&option_slot(option_id, TAG_STATUS));
-		if status != U256::from(STATUS_ACTIVE)  {
+		if !(status == U256::from(STATUS_ACTIVE) || status == U256::from(STATUS_RESALE)) {
 			return Err(Error::OptionNotActive);
-		}
-		if && status != U256::from(STATUS_RESALE) {
-			return Err(Error::OptionNotResale);
 		}
 
 		// Only the current buyer (option owner) can resell.
@@ -303,7 +307,7 @@ mod covered_call {
 		storage_clear(&option_slot(option_id, TAG_UNDERLYING));
 		storage_clear(&option_slot(option_id, TAG_STRIKE_ASSET));
 		storage_clear(&option_slot(option_id, TAG_AMOUNT));
-		storage_clear(&option_slot(option_id, TAG_STRIKE_PRICE));
+		storage_clear(&option_slot(option_id, TAG_STRIKE));
 		storage_clear(&option_slot(option_id, TAG_PREMIUM));
 		storage_clear(&option_slot(option_id, TAG_EXPIRY));
 		storage_clear(&option_slot(option_id, TAG_CREATED));
@@ -345,20 +349,19 @@ mod covered_call {
 		let underlying_raw = storage_get_raw(&option_slot(option_id, TAG_UNDERLYING));
 		let strike_raw = storage_get_raw(&option_slot(option_id, TAG_STRIKE_ASSET));
 		let amount = storage_get_u256(&option_slot(option_id, TAG_AMOUNT));
-		let strike_price = storage_get_u256(&option_slot(option_id, TAG_STRIKE_PRICE));
+		let strike = storage_get_u256(&option_slot(option_id, TAG_STRIKE));
 
 		let u_len = asset_byte_len(&underlying_raw);
 		let s_len = asset_byte_len(&strike_raw);
 
-		// In-the-money check: market value of underlying > strike cost.
+		// In-the-money check: market value of underlying > strike.
 		let market_value = get_dex_quote(&underlying_raw[..u_len], &strike_raw[..s_len], amount);
-		let total_cost = strike_price.checked_mul(amount).ok_or(Error::Overflow)?;
-		if market_value <= total_cost {
+		if market_value <= strike {
 			return Err(Error::NotInTheMoney);
 		}
 
 		// Buyer pays strike asset directly to seller.
-		pull_token(&strike_raw[..s_len], &caller, &seller, total_cost);
+		pull_token(&strike_raw[..s_len], &caller, &seller, strike);
 
 		// Release collateral to buyer.
 		push_token(&underlying_raw[..u_len], &caller, amount);
@@ -403,7 +406,7 @@ mod covered_call {
 		storage_clear(&option_slot(option_id, TAG_UNDERLYING));
 		storage_clear(&option_slot(option_id, TAG_STRIKE_ASSET));
 		storage_clear(&option_slot(option_id, TAG_AMOUNT));
-		storage_clear(&option_slot(option_id, TAG_STRIKE_PRICE));
+		storage_clear(&option_slot(option_id, TAG_STRIKE));
 		storage_clear(&option_slot(option_id, TAG_PREMIUM));
 		storage_clear(&option_slot(option_id, TAG_EXPIRY));
 		storage_clear(&option_slot(option_id, TAG_CREATED));
@@ -435,7 +438,7 @@ mod covered_call {
 		let underlying_raw = storage_get_raw(&option_slot(option_id, TAG_UNDERLYING));
 		let strike_raw = storage_get_raw(&option_slot(option_id, TAG_STRIKE_ASSET));
 		let amount = storage_get_u256(&option_slot(option_id, TAG_AMOUNT));
-		let strike_price = storage_get_u256(&option_slot(option_id, TAG_STRIKE_PRICE));
+		let strike = storage_get_u256(&option_slot(option_id, TAG_STRIKE));
 		let premium = storage_get_u256(&option_slot(option_id, TAG_PREMIUM));
 		let expiry = storage_get_u256(&option_slot(option_id, TAG_EXPIRY));
 		let created = storage_get_u256(&option_slot(option_id, TAG_CREATED));
@@ -451,7 +454,7 @@ mod covered_call {
 			Bytes(underlying_raw[..u_len].to_vec()),
 			Bytes(strike_raw[..s_len].to_vec()),
 			amount,
-			strike_price,
+			strike,
 			premium,
 			expiry,
 			created,
@@ -741,7 +744,7 @@ mod covered_call {
 		id: U256,
 		seller: &[u8; 20],
 		amount: U256,
-		strike_price: U256,
+		strike: U256,
 		premium: U256,
 		expiry: U256,
 	) {
@@ -755,7 +758,7 @@ mod covered_call {
 		t_seller[12..32].copy_from_slice(seller);
 		let mut data = [0u8; 128];
 		data[0..32].copy_from_slice(&enc_u256(amount));
-		data[32..64].copy_from_slice(&enc_u256(strike_price));
+		data[32..64].copy_from_slice(&enc_u256(strike));
 		data[64..96].copy_from_slice(&enc_u256(premium));
 		data[96..128].copy_from_slice(&enc_u256(expiry));
 		api::deposit_event(&[sig, t_id, t_seller], &data);
@@ -845,13 +848,14 @@ mod tests {
 		mock_api::set_now(10);
 	}
 
-	// Helper: write_option with standard args. Premium = 20.
+	// Helper: write_option with standard args.
+	// 100 TSTA collateral, 500 TSTB strike total, 20 premium, expires at t=50.
 	fn write_std() -> U256 {
 		write_option(
 			tsta(),
 			tstb(),
 			U256::from(100u64),
-			U256::from(5u64),
+			U256::from(500u64),
 			U256::from(20u64),
 			U256::from(50u64),
 		)
@@ -877,7 +881,7 @@ mod tests {
 			tstb(),
 			tsta(),
 			U256::from(200u64),
-			U256::from(10u64),
+			U256::from(2000u64),
 			U256::from(5u64),
 			U256::from(60u64),
 		);
@@ -892,7 +896,7 @@ mod tests {
 			tsta(),
 			tstb(),
 			U256::ZERO,
-			U256::from(5u64),
+			U256::from(500u64),
 			U256::from(20u64),
 			U256::from(50u64),
 		);
@@ -910,7 +914,7 @@ mod tests {
 			U256::from(20u64),
 			U256::from(50u64),
 		);
-		assert_eq!(result, Err(Error::InvalidAmount));
+		assert_eq!(result, Err(Error::InvalidStrike));
 	}
 
 	#[test]
@@ -920,7 +924,7 @@ mod tests {
 			tsta(),
 			tstb(),
 			U256::from(100u64),
-			U256::from(5u64),
+			U256::from(500u64),
 			U256::from(20u64),
 			U256::from(5u64),
 		);
@@ -935,7 +939,7 @@ mod tests {
 			native,
 			tstb(),
 			U256::from(100u64),
-			U256::from(5u64),
+			U256::from(500u64),
 			U256::from(20u64),
 			U256::from(50u64),
 		);
@@ -976,7 +980,7 @@ mod tests {
 			tsta(),
 			tstb(),
 			U256::from(100u64),
-			U256::from(5u64),
+			U256::from(500u64),
 			U256::from(20u64),
 			U256::from(15u64),
 		);
@@ -993,7 +997,7 @@ mod tests {
 			tsta(),
 			tstb(),
 			U256::from(100u64),
-			U256::from(5u64),
+			U256::from(500u64),
 			U256::ZERO, // zero premium
 			U256::from(50u64),
 		)
@@ -1051,7 +1055,7 @@ mod tests {
 			tsta(),
 			tstb(),
 			U256::from(100u64),
-			U256::from(5u64),
+			U256::from(500u64),
 			U256::from(20u64),
 			U256::from(15u64),
 		)
@@ -1082,7 +1086,7 @@ mod tests {
 			tsta(),
 			tstb(),
 			U256::from(100u64),
-			U256::from(5u64),
+			U256::from(500u64),
 			U256::from(20u64),
 			U256::from(15u64),
 		);
@@ -1102,7 +1106,7 @@ mod tests {
 			tsta(),
 			tstb(),
 			U256::from(100u64),
-			U256::from(5u64),
+			U256::from(500u64),
 			U256::from(20u64),
 			U256::from(15u64),
 		)
@@ -1131,7 +1135,7 @@ mod tests {
 			tsta(),
 			tstb(),
 			U256::from(100u64),
-			U256::from(5u64),
+			U256::from(500u64),
 			U256::from(20u64),
 			U256::from(15u64),
 		);
@@ -1152,7 +1156,7 @@ mod tests {
 			underlying,
 			strike_asset,
 			amount,
-			strike_price,
+			strike,
 			premium,
 			expiry,
 			created,
@@ -1164,7 +1168,7 @@ mod tests {
 		assert_eq!(underlying.0, vec![0x01, 1, 0, 0, 0]);
 		assert_eq!(strike_asset.0, vec![0x01, 2, 0, 0, 0]);
 		assert_eq!(amount, U256::from(100u64));
-		assert_eq!(strike_price, U256::from(5u64));
+		assert_eq!(strike, U256::from(500u64));
 		assert_eq!(premium, U256::from(20u64));
 		assert_eq!(expiry, U256::from(50u64));
 		assert_eq!(created, U256::from(10u64));
@@ -1225,7 +1229,7 @@ mod tests {
 			tsta(),
 			tstb(),
 			U256::from(100u64),
-			U256::from(5u64),
+			U256::from(500u64),
 			U256::from(20u64),
 			U256::from(15u64),
 		)
@@ -1295,32 +1299,10 @@ mod tests {
 			tsta(),
 			tstb(),
 			U256::from(100u64),
-			U256::from(5u64),
+			U256::from(500u64),
 			U256::from(20u64),
 			U256::from(50u64),
 		);
-		assert_eq!(result, Err(Error::Overflow));
-	}
-
-	#[test]
-	fn exercise_option_checked_mul_overflow() {
-		setup();
-		// strike_price * amount must overflow U256.
-		let id = write_option(
-			tsta(),
-			tstb(),
-			U256::MAX,       // amount
-			U256::from(2u64), // strike_price — 2 * U256::MAX overflows
-			U256::from(20u64),
-			U256::from(50u64),
-		)
-		.unwrap();
-		let _ = buy_option(id);
-
-		// DEX quote returns huge value so ITM check would pass without the overflow guard.
-		mock_api::set_call_output(&U256::MAX.to_be_bytes::<32>());
-
-		let result = exercise_option(id);
 		assert_eq!(result, Err(Error::Overflow));
 	}
 

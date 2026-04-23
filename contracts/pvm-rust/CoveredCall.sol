@@ -13,7 +13,7 @@ interface ICoveredCall {
         uint256 indexed optionId,
         address indexed seller,
         uint256 amount,
-        uint256 strikePrice,
+        uint256 strike,
         uint256 premium,
         uint256 expiry
     );
@@ -63,6 +63,7 @@ interface ICoveredCall {
     error NotInTheMoney();
     error InvalidAsset();
     error InvalidAmount();
+    error InvalidStrike();
     error InvalidExpiry();
     error Overflow();
 
@@ -72,7 +73,7 @@ interface ICoveredCall {
     /// @param underlying SCALE-encoded asset identifier for the underlying token
     /// @param strikeAsset SCALE-encoded asset identifier for the strike token
     /// @param amount Amount of underlying to deposit as collateral
-    /// @param strikePrice Price per unit in strike asset terms
+    /// @param strike Total amount of strike asset the buyer pays to exercise
     /// @param premium Price to buy (acquire) the option, denominated in strike asset
     /// @param expiry Unix timestamp (seconds) at which the option expires
     /// @return optionId The ID of the newly created option
@@ -80,7 +81,7 @@ interface ICoveredCall {
         bytes calldata underlying,
         bytes calldata strikeAsset,
         uint256 amount,
-        uint256 strikePrice,
+        uint256 strike,
         uint256 premium,
         uint256 expiry
     ) external returns (uint256 optionId);
@@ -107,9 +108,9 @@ interface ICoveredCall {
     function cancelOption(uint256 optionId) external;
 
     /// @notice Exercise an active option before expiry. Only the buyer can exercise.
-    ///         Buyer pays strikePrice * amount of the strike asset directly to the
-    ///         seller and receives the underlying collateral.
-    ///         Only exercisable when the option is in-the-money (market value > strike cost).
+    ///         Buyer pays the strike amount of strike asset directly to the seller
+    ///         and receives the underlying collateral.
+    ///         Only exercisable when the option is in-the-money (market value > strike).
     /// @param optionId The option to exercise
     function exerciseOption(uint256 optionId) external;
 
@@ -125,7 +126,7 @@ interface ICoveredCall {
         bytes memory underlying,
         bytes memory strikeAsset,
         uint256 amount,
-        uint256 strikePrice,
+        uint256 strike,
         uint256 premium,
         uint256 expiry,
         uint256 created,
