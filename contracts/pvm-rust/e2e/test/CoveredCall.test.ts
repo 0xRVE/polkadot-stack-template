@@ -17,7 +17,7 @@ const coveredCallAbi = parseAbi([
 	"function cancelOption(uint256 optionId) external",
 	"function exerciseOption(uint256 optionId) external",
 	"function expireOption(uint256 optionId) external",
-	"function getOption(uint256 optionId) external view returns (address seller, bytes underlying, bytes strikeAsset, uint256 amount, uint256 strike, uint256 premium, uint256 expiry, uint256 created, address buyer, uint256 askPrice, uint256 status)",
+	"function getOption(uint256 optionId) external view returns (address seller, bytes underlying, bytes strikeAsset, uint256 amount, uint256 strike, uint256 premium, uint256 expiry, uint256 created, address owner, uint256 askPrice, uint256 status)",
 	"function nextOptionId() external view returns (uint256)",
 	"error PrecompileCallFailed()",
 	"error TransferFromFailed()",
@@ -25,7 +25,7 @@ const coveredCallAbi = parseAbi([
 	"error OptionNotListed()",
 	"error OptionNotExpired()",
 	"error OptionAlreadyExpired()",
-	"error NotOptionBuyer()",
+	"error NotOptionOwner()",
 	"error UnauthorizedCancel()",
 	"error OptionNotResale()",
 	"error NotInTheMoney()",
@@ -425,7 +425,7 @@ describe("CoveredCall (PVM-Rust)", function () {
 				premium,
 				expiry,
 				created,
-				buyer,
+				owner,
 				askPrice,
 				status,
 			] = await cc.read.getOption([firstOptionId]);
@@ -439,8 +439,8 @@ describe("CoveredCall (PVM-Rust)", function () {
 			expect(expiry).to.equal(firstOptionExpiry);
 			expect(created > 0n).to.equal(true, "created should be > 0");
 			expect(created <= firstOptionExpiry).to.equal(true, "created should be <= expiry");
-			// No buyer yet — zero address
-			expect(buyer.toLowerCase()).to.equal("0x0000000000000000000000000000000000000000");
+			// No owner yet — zero address
+			expect(owner.toLowerCase()).to.equal("0x0000000000000000000000000000000000000000");
 			expect(askPrice).to.equal(0n);
 			expect(status).to.equal(STATUS_LISTED);
 		});
@@ -512,8 +512,8 @@ describe("CoveredCall (PVM-Rust)", function () {
 				cc.write.buyOption([buyableOptionId], { gas: 5_000_000n }),
 			);
 
-			const [, , , , , , , , buyer, , status] = await cc.read.getOption([buyableOptionId]);
-			expect(buyer.toLowerCase()).to.equal(deployer.account.address.toLowerCase());
+			const [, , , , , , , , owner, , status] = await cc.read.getOption([buyableOptionId]);
+			expect(owner.toLowerCase()).to.equal(deployer.account.address.toLowerCase());
 			expect(status).to.equal(STATUS_ACTIVE);
 		});
 
@@ -651,12 +651,12 @@ describe("CoveredCall (PVM-Rust)", function () {
 			);
 		});
 
-		it("rejects exercise by non-buyer", async function () {
+		it("rejects exercise by non-owner", async function () {
 			// Write and buy an option as Alice (deployer)
 			await waitForNextBlock();
 			const chainNow = await getChainTimestamp();
 
-			await sendWithRetry("writeOption (for non-buyer test)", () =>
+			await sendWithRetry("writeOption (for non-owner test)", () =>
 				cc.write.writeOption(
 					[ASSETS.testA, ASSETS.testB, 100_000n, 1n, 0n, chainNow + 600n],
 					{ gas: 5_000_000n },
@@ -669,18 +669,18 @@ describe("CoveredCall (PVM-Rust)", function () {
 				cc.write.buyOption([optionId], { gas: 5_000_000n }),
 			);
 
-			// Bob (not the buyer) tries to exercise
+			// Bob (not the owner) tries to exercise
 			const bob = await getWalletClientByIndex(1);
 			await approveERC20As(1, ERC20_TSTB, contractAddress, 100_000_000_000_000n);
 			await waitForNextBlock();
 			await expectTxReverts(
 				bob,
 				{ address: contractAddress, functionName: "exerciseOption", args: [optionId] },
-				"NotOptionBuyer",
+				"NotOptionOwner",
 			);
 		});
 
-		it("rejects resell by non-buyer", async function () {
+		it("rejects resell by non-owner", async function () {
 			// Write and buy an option as Alice (deployer)
 			await waitForNextBlock();
 			const chainNow = await getChainTimestamp();
@@ -698,13 +698,13 @@ describe("CoveredCall (PVM-Rust)", function () {
 				cc.write.buyOption([optionId], { gas: 5_000_000n }),
 			);
 
-			// Bob (not the buyer) tries to resell
+			// Bob (not the owner) tries to resell
 			const bob = await getWalletClientByIndex(1);
 			await waitForNextBlock();
 			await expectTxReverts(
 				bob,
 				{ address: contractAddress, functionName: "resellOption", args: [optionId, 100n] },
-				"NotOptionBuyer",
+				"NotOptionOwner",
 			);
 		});
 
@@ -1038,8 +1038,8 @@ describe("CoveredCall (PVM-Rust)", function () {
 				}),
 			);
 
-			const [, , , , , , , , buyer, , status] = await cc.read.getOption([optionId]);
-			expect(buyer.toLowerCase()).to.equal(deployer.account.address.toLowerCase());
+			const [, , , , , , , , owner, , status] = await cc.read.getOption([optionId]);
+			expect(owner.toLowerCase()).to.equal(deployer.account.address.toLowerCase());
 			expect(status).to.equal(STATUS_ACTIVE);
 
 			// Alice tries to cancel — should fail (option is Active, not Listed)
@@ -1385,10 +1385,10 @@ describe("CoveredCall full lifecycle", function () {
 			expect(bobTSTBbefore - bobTSTBafter).to.equal(500n);
 			expect(aliceTSTBafter - aliceTSTBbefore).to.equal(500n);
 
-			const [, , , , , , , , buyer, , status] = await sharedContract.read.getOption([
+			const [, , , , , , , , owner, , status] = await sharedContract.read.getOption([
 				optionId,
 			]);
-			expect(buyer.toLowerCase()).to.equal(BOB_ADDR.toLowerCase());
+			expect(owner.toLowerCase()).to.equal(BOB_ADDR.toLowerCase());
 			expect(status).to.equal(STATUS_ACTIVE);
 		});
 
@@ -1473,10 +1473,10 @@ describe("CoveredCall full lifecycle", function () {
 			expect(bobTSTBbefore - bobTSTBafter).to.equal(500n);
 			expect(aliceTSTBafter - aliceTSTBbefore).to.equal(500n);
 
-			const [, , , , , , , , buyer, , status] = await sharedContract.read.getOption([
+			const [, , , , , , , , owner, , status] = await sharedContract.read.getOption([
 				optionId,
 			]);
-			expect(buyer.toLowerCase()).to.equal(BOB_ADDR.toLowerCase());
+			expect(owner.toLowerCase()).to.equal(BOB_ADDR.toLowerCase());
 			expect(status).to.equal(STATUS_ACTIVE);
 		});
 
@@ -1506,10 +1506,10 @@ describe("CoveredCall full lifecycle", function () {
 			expect(charlieTSTBbefore - charlieTSTBafter).to.equal(300n);
 			expect(bobTSTBafter - bobTSTBbefore).to.equal(300n);
 
-			const [, , , , , , , , buyer, askPrice, status] = await sharedContract.read.getOption([
+			const [, , , , , , , , owner, askPrice, status] = await sharedContract.read.getOption([
 				optionId,
 			]);
-			expect(buyer.toLowerCase()).to.equal(CHARLIE_ADDR.toLowerCase());
+			expect(owner.toLowerCase()).to.equal(CHARLIE_ADDR.toLowerCase());
 			expect(status).to.equal(STATUS_ACTIVE);
 			expect(askPrice).to.equal(0n);
 		});
@@ -1669,10 +1669,10 @@ describe("CoveredCall full lifecycle", function () {
 			expect(bobTSTBbefore - bobTSTBafter).to.equal(100n);
 			expect(aliceTSTBafter - aliceTSTBbefore).to.equal(100n);
 
-			const [, , , , , , , , buyer, , status] = await sharedContract.read.getOption([
+			const [, , , , , , , , owner, , status] = await sharedContract.read.getOption([
 				optionId,
 			]);
-			expect(buyer.toLowerCase()).to.equal(BOB_ADDR.toLowerCase());
+			expect(owner.toLowerCase()).to.equal(BOB_ADDR.toLowerCase());
 			expect(status).to.equal(STATUS_ACTIVE);
 		});
 
