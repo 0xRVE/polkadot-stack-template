@@ -10,13 +10,14 @@ import { ApiPromise, WsProvider, Keyring } from "@polkadot/api";
 // ---------------------------------------------------------------------------
 
 const coveredCallAbi = parseAbi([
-	"function writeOption(bytes underlying, bytes strikeAsset, uint256 amount, uint256 strikePrice, uint256 premium, uint256 expiry) external returns (uint256)",
+	"function writeOption(bytes underlying, bytes strikeAsset, uint256 amount, uint256 strike, uint256 premium, uint256 expiry) external returns (uint256)",
 	"function buyOption(uint256 optionId) external",
 	"function resellOption(uint256 optionId, uint256 askPrice) external",
+	"function delistOption(uint256 optionId) external",
 	"function cancelOption(uint256 optionId) external",
 	"function exerciseOption(uint256 optionId) external",
 	"function expireOption(uint256 optionId) external",
-	"function getOption(uint256 optionId) external view returns (address seller, bytes underlying, bytes strikeAsset, uint256 amount, uint256 strikePrice, uint256 premium, uint256 expiry, uint256 created, address buyer, uint256 askPrice, uint256 status)",
+	"function getOption(uint256 optionId) external view returns (address seller, bytes underlying, bytes strikeAsset, uint256 amount, uint256 strike, uint256 premium, uint256 expiry, uint256 created, address buyer, uint256 askPrice, uint256 status)",
 	"function nextOptionId() external view returns (uint256)",
 	"error PrecompileCallFailed()",
 	"error TransferFromFailed()",
@@ -26,10 +27,13 @@ const coveredCallAbi = parseAbi([
 	"error OptionAlreadyExpired()",
 	"error NotOptionBuyer()",
 	"error UnauthorizedCancel()",
+	"error OptionNotResale()",
 	"error NotInTheMoney()",
 	"error InvalidAsset()",
 	"error InvalidAmount()",
+	"error InvalidStrike()",
 	"error InvalidExpiry()",
+	"error Overflow()",
 ]);
 
 // ---------------------------------------------------------------------------
@@ -417,7 +421,7 @@ describe("CoveredCall (PVM-Rust)", function () {
 				underlying,
 				strikeAsset,
 				amount,
-				strikePrice,
+				strike,
 				premium,
 				expiry,
 				created,
@@ -430,7 +434,7 @@ describe("CoveredCall (PVM-Rust)", function () {
 			expect(underlying.toLowerCase()).to.equal(ASSETS.testA.toLowerCase());
 			expect(strikeAsset.toLowerCase()).to.equal(ASSETS.testB.toLowerCase());
 			expect(amount).to.equal(1_000_000_000n);
-			expect(strikePrice).to.equal(1n);
+			expect(strike).to.equal(1n);
 			expect(premium).to.equal(500n);
 			expect(expiry).to.equal(firstOptionExpiry);
 			expect(created > 0n).to.equal(true, "created should be > 0");
@@ -708,7 +712,7 @@ describe("CoveredCall (PVM-Rust)", function () {
 			// Write an option with enough time to buy, then wait for expiry
 			await waitForNextBlock();
 			const chainNow = await getChainTimestamp();
-			const expiry = chainNow + 30n; // 30s — enough to buy, then expires
+			const expiry = chainNow + 60n; // 60s — enough to buy, then expires
 
 			await sendWithRetry("writeOption (for expired-exercise test)", () =>
 				cc.write.writeOption([ASSETS.testA, ASSETS.testB, 100_000n, 1n, 0n, expiry], {
@@ -722,8 +726,8 @@ describe("CoveredCall (PVM-Rust)", function () {
 				cc.write.buyOption([optionId], { gas: 5_000_000n }),
 			);
 
-			// Wait for expiry to pass (~30s from chainNow, ~20s remaining after buy)
-			for (let i = 0; i < 12; i++) {
+			// Wait for expiry to pass
+			for (let i = 0; i < 25; i++) {
 				await waitForNextBlock();
 			}
 
@@ -743,7 +747,7 @@ describe("CoveredCall (PVM-Rust)", function () {
 
 			await sendWithRetry("writeOption (active-expire)", () =>
 				cc.write.writeOption(
-					[ASSETS.testA, ASSETS.testB, collateral, 1n, 0n, chainNow + 30n],
+					[ASSETS.testA, ASSETS.testB, collateral, 1n, 0n, chainNow + 60n],
 					{ gas: 5_000_000n },
 				),
 			);
@@ -758,8 +762,8 @@ describe("CoveredCall (PVM-Rust)", function () {
 			const [, , , , , , , , , , statusAfterBuy] = await cc.read.getOption([optionId]);
 			expect(statusAfterBuy).to.equal(STATUS_ACTIVE);
 
-			// Wait for expiry (~30s from chainNow, ~20s remaining after buy)
-			for (let i = 0; i < 12; i++) {
+			// Wait for expiry
+			for (let i = 0; i < 25; i++) {
 				await waitForNextBlock();
 			}
 
@@ -1211,7 +1215,7 @@ function ccAs(signerIndex: number, contractAddress: Hex) {
 			underlying: Hex,
 			strikeAsset: Hex,
 			amount: bigint,
-			strikePrice: bigint,
+			strike: bigint,
 			premium: bigint,
 			expiry: bigint,
 		) {
@@ -1221,7 +1225,7 @@ function ccAs(signerIndex: number, contractAddress: Hex) {
 					address: contractAddress,
 					abi: coveredCallAbi,
 					functionName: "writeOption",
-					args: [underlying, strikeAsset, amount, strikePrice, premium, expiry],
+					args: [underlying, strikeAsset, amount, strike, premium, expiry],
 					gas: 5_000_000n,
 				}),
 			);
@@ -1353,7 +1357,7 @@ describe("CoveredCall full lifecycle", function () {
 				ASSETS.testA,
 				ASSETS.testB,
 				OPTION_AMOUNT,
-				1n,
+				OPTION_AMOUNT, // strike total = 1e9 TSTB (1:1 at current pool ratio)
 				500n,
 				expiry,
 			);
@@ -1416,11 +1420,10 @@ describe("CoveredCall full lifecycle", function () {
 
 			// Bob receives the underlying TSTA
 			expect(bobTSTAafter - bobTSTAbefore).to.equal(OPTION_AMOUNT);
-			// Bob pays strikePrice * amount of TSTB to seller
-			const strikeCost = 1n * OPTION_AMOUNT;
-			expect(bobTSTBbefore - bobTSTBafter).to.equal(strikeCost);
+			// Bob pays strike total of TSTB to seller
+			expect(bobTSTBbefore - bobTSTBafter).to.equal(OPTION_AMOUNT);
 			// Alice (seller) receives the strike payment
-			expect(aliceTSTBafter - aliceTSTBbefore).to.equal(strikeCost);
+			expect(aliceTSTBafter - aliceTSTBbefore).to.equal(OPTION_AMOUNT);
 
 			const [, , , , , , , , , , status] = await sharedContract.read.getOption([optionId]);
 			expect(status).to.equal(STATUS_EXERCISED);
@@ -1441,7 +1444,7 @@ describe("CoveredCall full lifecycle", function () {
 				ASSETS.testA,
 				ASSETS.testB,
 				OPTION_AMOUNT,
-				1n,
+				OPTION_AMOUNT, // strike total = 1e9 TSTB
 				500n,
 				expiry,
 			);
@@ -1526,10 +1529,9 @@ describe("CoveredCall full lifecycle", function () {
 
 			// Charlie receives underlying TSTA
 			expect(charlieTSTAafter - charlieTSTAbefore).to.equal(OPTION_AMOUNT);
-			// Charlie pays strike cost to Alice
-			const strikeCost = 1n * OPTION_AMOUNT;
-			expect(charlieTSTBbefore - charlieTSTBafter).to.equal(strikeCost);
-			expect(aliceTSTBafter - aliceTSTBbefore).to.equal(strikeCost);
+			// Charlie pays strike total to Alice
+			expect(charlieTSTBbefore - charlieTSTBafter).to.equal(OPTION_AMOUNT);
+			expect(aliceTSTBafter - aliceTSTBbefore).to.equal(OPTION_AMOUNT);
 
 			const [, , , , , , , , , , status] = await sharedContract.read.getOption([optionId]);
 			expect(status).to.equal(STATUS_EXERCISED);
@@ -1552,13 +1554,13 @@ describe("CoveredCall full lifecycle", function () {
 			);
 		});
 
-		it("2. Verify TSTA is worth more than 1 TSTB (already ITM for strike=1)", async function () {
+		it("2. Verify TSTA market value exceeds strike (already ITM)", async function () {
 			await waitForNextBlock();
 			const quote = await getDexQuote(ASSETS.testA, ASSETS.testB, OPTION_AMOUNT);
-			// Market value should exceed strike cost (1 * OPTION_AMOUNT)
+			// Market value should exceed strike total
 			expect(quote > OPTION_AMOUNT).to.equal(
 				true,
-				`Expected quote ${quote} > strike cost ${OPTION_AMOUNT}`,
+				`Expected quote ${quote} > strike ${OPTION_AMOUNT}`,
 			);
 		});
 
@@ -1572,7 +1574,7 @@ describe("CoveredCall full lifecycle", function () {
 				ASSETS.testA,
 				ASSETS.testB,
 				OPTION_AMOUNT,
-				1n,
+				OPTION_AMOUNT, // strike total = 1e9 TSTB, already ITM after swap
 				100n,
 				expiry,
 			);
@@ -1603,11 +1605,10 @@ describe("CoveredCall full lifecycle", function () {
 
 			// Bob receives underlying
 			expect(bobTSTAafter - bobTSTAbefore).to.equal(OPTION_AMOUNT);
-			// Bob pays strike cost
-			const strikeCost = 1n * OPTION_AMOUNT;
-			expect(bobTSTBbefore - bobTSTBafter).to.equal(strikeCost);
+			// Bob pays strike total
+			expect(bobTSTBbefore - bobTSTBafter).to.equal(OPTION_AMOUNT);
 			// Alice receives strike payment
-			expect(aliceTSTBafter - aliceTSTBbefore).to.equal(strikeCost);
+			expect(aliceTSTBafter - aliceTSTBbefore).to.equal(OPTION_AMOUNT);
 
 			const [, , , , , , , , , , status] = await sharedContract.read.getOption([optionId]);
 			expect(status).to.equal(STATUS_EXERCISED);
@@ -1630,22 +1631,24 @@ describe("CoveredCall full lifecycle", function () {
 			const chainNow = await getChainTimestamp();
 			const expiry = chainNow + 600n;
 
-			// Strike price so high the option can never be ITM with current pool
+			// Strike total so high the option can never be ITM with current pool
+			const OTM_STRIKE = 1_000_000_000_000n; // 1e12 — far exceeds any DEX quote for 1e9 TSTA
 			const idBefore = await sharedContract.read.nextOptionId();
 			await ccAs(ALICE, contractAddress).writeOption(
 				ASSETS.testA,
 				ASSETS.testB,
 				OPTION_AMOUNT,
-				1000n,
+				OTM_STRIKE,
 				100n,
 				expiry,
 			);
 			optionId = idBefore;
 
-			const [seller, , , , strikePrice, , , , , , status] =
-				await sharedContract.read.getOption([optionId]);
+			const [seller, , , , strike, , , , , , status] = await sharedContract.read.getOption([
+				optionId,
+			]);
 			expect(seller.toLowerCase()).to.equal(ALICE_ADDR.toLowerCase());
-			expect(strikePrice).to.equal(1000n);
+			expect(strike).to.equal(OTM_STRIKE);
 			expect(status).to.equal(STATUS_LISTED);
 		});
 

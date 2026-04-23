@@ -10,7 +10,8 @@ use ruint::aliases::U256;
 #[path = "covered_call_mock_api.rs"]
 mod mock_api;
 
-// TODO: pack option details into fewer storage slots using encoding, to save costs and allow more fields if needed.
+// TODO: pack option details into fewer storage slots using encoding, to save costs and allow more
+// fields if needed. TODO: use u128 for amounts and price? Is that bad UX?
 
 /// CoveredCall — covered call options backed by ERC20 collateral.
 /// Uses the asset-conversion precompile for in-the-money price checks.
@@ -1291,7 +1292,7 @@ mod tests {
 
 		let (_, _, _, _, _, _, _, _, _, ask_price, status) = get_option(id);
 		assert_eq!(status, U256::from(1u64)); // Active.
-		assert_eq!(ask_price, U256::ZERO);    // Cleared.
+		assert_eq!(ask_price, U256::ZERO); // Cleared.
 	}
 
 	#[test]
