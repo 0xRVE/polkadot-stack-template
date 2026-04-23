@@ -75,6 +75,7 @@ mod covered_call {
 		InvalidAsset,
 		InvalidAmount,
 		InvalidExpiry,
+		Overflow,
 		UnknownSelector,
 	}
 
@@ -93,6 +94,7 @@ mod covered_call {
 				Error::InvalidAsset => b"InvalidAsset",
 				Error::InvalidAmount => b"InvalidAmount",
 				Error::InvalidExpiry => b"InvalidExpiry",
+				Error::Overflow => b"Overflow",
 				Error::UnknownSelector => b"UnknownSelector",
 			}
 		}
@@ -135,7 +137,8 @@ mod covered_call {
 
 		// Read and increment counter.
 		let option_id = storage_get_u256(&SLOT_NEXT_ID);
-		storage_set_u256(&SLOT_NEXT_ID, option_id + U256::from(1));
+		let next_id = option_id.checked_add(U256::from(1)).ok_or(Error::Overflow)?;
+		storage_set_u256(&SLOT_NEXT_ID, next_id);
 
 		// Lock collateral from caller.
 		freeze_token(&underlying.0, &caller, &me, amount);
@@ -317,7 +320,7 @@ mod covered_call {
 
 		// In-the-money check: market value of underlying > strike cost.
 		let market_value = get_dex_quote(&underlying_raw[..u_len], &strike_raw[..s_len], amount);
-		let total_cost = strike_price * amount;
+		let total_cost = strike_price.checked_mul(amount).ok_or(Error::Overflow)?;
 		if market_value <= total_cost {
 			return Err(Error::NotInTheMoney);
 		}
@@ -605,7 +608,13 @@ mod covered_call {
 	}
 
 	fn erc20_call(addr: &[u8; 20], calldata: &[u8]) -> [u8; 128] {
-		do_call(addr, calldata, b"TransferFromFailed()")
+		let output = do_call(addr, calldata, b"TransferFromFailed()");
+		// ERC20 transfer/transferFrom return bool — revert if false.
+		if output[31] == 0 {
+			let s = sel(b"TransferFromFailed()");
+			api::return_value(ReturnFlags::REVERT, &s);
+		}
+		output
 	}
 
 	fn do_call(addr: &[u8; 20], calldata: &[u8], err_sig: &[u8]) -> [u8; 128] {
@@ -1188,5 +1197,59 @@ mod tests {
 		let result = expire_option(id);
 		assert_eq!(result, Ok(()));
 		assert_eq!(mock_api::call_count(), 1);
+	}
+
+	#[test]
+	fn write_option_checked_add_overflow() {
+		setup();
+		// Set the option ID counter to U256::MAX so the next write overflows.
+		let max = U256::MAX;
+		mock_api::set_storage(&[0u8; 32], &max.to_be_bytes::<32>());
+
+		let result = write_option(
+			tsta(),
+			tstb(),
+			U256::from(100u64),
+			U256::from(5u64),
+			U256::from(20u64),
+			U256::from(50u64),
+		);
+		assert_eq!(result, Err(Error::Overflow));
+	}
+
+	#[test]
+	fn exercise_option_checked_mul_overflow() {
+		setup();
+		// strike_price * amount must overflow U256.
+		let id = write_option(
+			tsta(),
+			tstb(),
+			U256::MAX,       // amount
+			U256::from(2u64), // strike_price — 2 * U256::MAX overflows
+			U256::from(20u64),
+			U256::from(50u64),
+		)
+		.unwrap();
+		let _ = buy_option(id);
+
+		// DEX quote returns huge value so ITM check would pass without the overflow guard.
+		mock_api::set_call_output(&U256::MAX.to_be_bytes::<32>());
+
+		let result = exercise_option(id);
+		assert_eq!(result, Err(Error::Overflow));
+	}
+
+	#[test]
+	#[should_panic(expected = "contract reverted")]
+	fn erc20_returning_false_reverts() {
+		setup();
+		let id = write_std();
+
+		// Set call output to all zeros — ERC20 returns false.
+		mock_api::set_call_output(&[0u8; 128]);
+
+		// buy_option calls pull_token for premium, which calls erc20_call.
+		// The call succeeds (no error) but returns false → should revert.
+		let _ = buy_option(id);
 	}
 }

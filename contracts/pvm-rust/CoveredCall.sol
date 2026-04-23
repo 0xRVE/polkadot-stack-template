@@ -58,6 +58,7 @@ interface ICoveredCall {
     error InvalidAsset();
     error InvalidAmount();
     error InvalidExpiry();
+    error Overflow();
 
     // --- Write Functions ---
 
