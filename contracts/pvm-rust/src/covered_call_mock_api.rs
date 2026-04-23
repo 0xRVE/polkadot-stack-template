@@ -166,3 +166,9 @@ pub fn event_count() -> u32 {
 pub fn call_count() -> u32 {
 	with_state(|s| s.call_count)
 }
+
+pub fn set_storage(key: &[u8; 32], value: &[u8; 32]) {
+	with_state(|s| {
+		s.storage.insert(*key, *value);
+	});
+}
