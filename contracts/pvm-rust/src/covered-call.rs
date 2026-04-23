@@ -58,7 +58,6 @@ mod covered_call {
 	/// Global slot for next option ID counter.
 	const SLOT_NEXT_ID: [u8; 32] = [0u8; 32];
 
-
 	// ── Errors ───────────────────────────────────────────────────────────
 
 	#[derive(Debug, Clone, Copy, PartialEq, Eq)]
