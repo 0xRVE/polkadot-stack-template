@@ -11,7 +11,7 @@ interface ICoveredCall {
 
     event OptionWritten(
         uint256 indexed optionId,
-        address indexed seller,
+        address indexed writer,
         uint256 amount,
         uint256 strike,
         uint256 premium,
@@ -25,7 +25,7 @@ interface ICoveredCall {
 
     event OptionResale(
         uint256 indexed optionId,
-        address indexed seller,
+        address indexed owner,
         uint256 askPrice
     );
 
@@ -36,12 +36,12 @@ interface ICoveredCall {
 
     event OptionExpired(
         uint256 indexed optionId,
-        address indexed seller
+        address indexed writer
     );
 
     event OptionCancelled(
         uint256 indexed optionId,
-        address indexed seller
+        address indexed writer
     );
 
     event OptionDelisted(
@@ -87,7 +87,7 @@ interface ICoveredCall {
     ) external returns (uint256 optionId);
 
     /// @notice Buy an option from the orderbook. Pays the premium (first sale) or
-    ///         ask price (resale) to the seller/current owner.
+    ///         ask price (resale) to the writer/current owner.
     /// @param optionId The option to buy
     function buyOption(uint256 optionId) external;
 
@@ -103,12 +103,12 @@ interface ICoveredCall {
     function delistOption(uint256 optionId) external;
 
     /// @notice Cancel a listed option that hasn't been bought yet.
-    ///         Only the seller can cancel. Returns collateral to seller.
+    ///         Only the writer can cancel. Returns collateral to writer.
     /// @param optionId The option to cancel
     function cancelOption(uint256 optionId) external;
 
     /// @notice Exercise an active option before expiry. Only the owner can exercise.
-    ///         Owner pays the strike amount of strike asset directly to the seller
+    ///         Owner pays the strike amount of strike asset directly to the writer
     ///         and receives the underlying collateral.
     ///         Only exercisable when the option is in-the-money (market value > strike).
     /// @param optionId The option to exercise
@@ -122,7 +122,7 @@ interface ICoveredCall {
 
     /// @notice Read option details.
     function getOption(uint256 optionId) external view returns (
-        address seller,
+        address writer,
         bytes memory underlying,
         bytes memory strikeAsset,
         uint256 amount,
